@@ -1,0 +1,25 @@
+services:
+  dashboard:
+    build: .
+    image: catdash
+    container_name: catdash
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /data/catdash.db
+      TZ: ${TZ:-UTC}
+      COLLECT_INTERVAL_HOURS: ${COLLECT_INTERVAL_HOURS:-6}
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - catdash_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz').status==200 else 1)"]
+      interval: 1m
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  catdash_data:
+    /volume1/docker/catdash:/data

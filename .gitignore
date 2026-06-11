@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Local data
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Frontend
+web/node_modules/
+web/dist/
+catdash/static/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
