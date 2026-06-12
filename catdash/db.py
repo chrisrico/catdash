@@ -19,6 +19,7 @@ overlapping collection runs never create duplicates.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -102,9 +103,62 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+class DatabaseNotWritable(RuntimeError):
+    """The DB path can't be opened read-write; str(exc) is an actionable message.
+
+    Raised instead of letting sqlite3.OperationalError escape, because the
+    sqlite message ("unable to open database file") names neither the path nor
+    the fix — and the classic cause (a DB created by the old root-running image,
+    now unwritable by uid 1000) has a documented one-line remedy."""
+
+
+# sqlite3.OperationalError fragments that mean "filesystem permissions", not
+# "bad SQL": seen as "unable to open database file" when the directory blocks
+# the WAL sidecars, and "attempt to write a readonly database" when the file
+# itself is read-only.
+_READONLY_MARKERS = ("unable to open database file", "readonly database")
+
+
+def _unwritable_message(path: Path) -> str:
+    # Mirrors the README's "Updating" note: a DB created by the old root-running
+    # image is root-owned, and the container now runs as non-root (the image's
+    # uid 1000, or the compose PUID/PGID override) — so suggest chowning to the
+    # uid/gid this process actually runs as.
+    uid, gid = os.getuid(), os.getgid()
+    return (
+        f"DB at {path} is not writable by uid {uid} — run: "
+        f"docker compose run --rm --user root dashboard chown -R {uid}:{gid} /data "
+        "(see README 'Updating')"
+    )
+
+
+def _check_writable(path: Path) -> None:
+    # Find the deepest existing ancestor: /data exists in the image, but a
+    # local run may need connect() to mkdir data/ first, so check the
+    # directory we'd actually be creating into.
+    directory = path.parent
+    while not directory.exists() and directory != directory.parent:
+        directory = directory.parent
+    # The directory must be writable even when the DB file is: WAL mode
+    # creates -wal/-shm sidecars next to the DB on every connect.
+    dir_ok = os.access(directory, os.W_OK | os.X_OK)
+    file_ok = (not path.exists()) or os.access(path, os.W_OK)
+    if not (dir_ok and file_ok):
+        raise DatabaseNotWritable(_unwritable_message(path))
+
+
 def init_db() -> None:
-    with connect() as conn:
-        conn.executescript(SCHEMA)
+    path = Path(get_settings().db_path)
+    _check_writable(path)
+    try:
+        with connect() as conn:
+            conn.executescript(SCHEMA)
+    except sqlite3.OperationalError as exc:
+        # Fallback for unwritability the os.access() precheck can't see —
+        # e.g. Synology ACLs that deny writes despite permissive mode bits.
+        if any(marker in str(exc) for marker in _READONLY_MARKERS):
+            raise DatabaseNotWritable(_unwritable_message(path)) from exc
+        raise
 
 
 def _count_new(conn: sqlite3.Connection, fn) -> int:

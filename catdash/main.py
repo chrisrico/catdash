@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -80,7 +81,17 @@ STATIC_DIR = _find_static_dir()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    db.init_db()
+    try:
+        db.init_db()
+    except db.DatabaseNotWritable as exc:
+        # The classic cause: upgrading from the old root-running image without
+        # the one-time chown (README "Updating"). Letting the exception escape
+        # would dump a traceback on every restart-loop iteration and explain
+        # nothing — log the fix and stop the process instead. os._exit (not
+        # SystemExit) because the lifespan machinery wraps any exception in a
+        # fresh traceback dump, which is exactly the noise we're avoiding.
+        logger.error(str(exc))
+        os._exit(1)
     logger.info("DB ready at %s", settings.db_path)
 
     # Kick off an immediate collection, then run on the configured interval.
