@@ -1,13 +1,15 @@
 <script>
   import Chart from "./Chart.svelte";
   import { dayToLocalTime, bucketUnit, bucketBy, sum } from "./api.js";
-  import { COLORS, baseOption, timeAxis, valueAxis } from "./echarts.js";
+  import { palette, baseOption, timeAxis, valueAxis } from "./echarts.js";
+  import { themeState } from "./theme.svelte.js";
 
   let { food } = $props();
 
   const DAY = 86400000;
 
   const option = $derived.by(() => {
+    const c = palette(themeState.resolved);
     // Daily bars become 1px slivers across multi-year spans, so bucket the
     // dispensed totals by day / week / month depending on the visible range.
     const span =
@@ -29,15 +31,15 @@
     if (levels.length) levels.push([Date.now(), levels[levels.length - 1][1]]);
 
     return {
-      ...baseOption,
-      xAxis: timeAxis,
+      ...baseOption(c),
+      xAxis: timeAxis(c),
       yAxis: [
-        { ...valueAxis, name: "cups", nameTextStyle: { color: COLORS.muted } },
+        { ...valueAxis(c), name: "cups", nameTextStyle: { color: c.muted } },
         {
-          ...valueAxis,
+          ...valueAxis(c),
           max: 100,
           splitLine: { show: false },
-          axisLabel: { ...valueAxis.axisLabel, formatter: "{value}%" },
+          axisLabel: { ...valueAxis(c).axisLabel, formatter: "{value}%" },
         },
       ],
       series: [
@@ -47,7 +49,7 @@
           data: bars,
           barMaxWidth: 36,
           barMinHeight: 1,
-          itemStyle: { color: "rgba(240,136,62,0.6)", borderColor: COLORS.accent2 },
+          itemStyle: { color: c.barFood, borderColor: c.accent2 },
         },
         {
           name: "Hopper level (%)",
@@ -61,10 +63,10 @@
           endLabel: {
             show: levels.length > 0,
             formatter: (p) => `${p.value[1]}%`,
-            color: COLORS.accent,
+            color: c.accent,
           },
-          itemStyle: { color: COLORS.accent },
-          lineStyle: { color: COLORS.accent, width: 2 },
+          itemStyle: { color: c.accent },
+          lineStyle: { color: c.accent, width: 2 },
         },
       ],
     };

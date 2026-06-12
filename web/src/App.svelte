@@ -1,6 +1,7 @@
 <script>
   import { fetchJSON, rangeToStart, ACTIVITY_CATEGORIES } from "./lib/api.js";
   import { loadPersisted, savePersisted } from "./lib/persist.js";
+  import { themeState } from "./lib/theme.svelte.js";
   import Controls from "./lib/Controls.svelte";
   import Cards from "./lib/Cards.svelte";
   import WeightChart from "./lib/WeightChart.svelte";
@@ -25,6 +26,12 @@
     savePersisted("range", range);
     savePersisted("showRaw", showRaw);
     savePersisted("activityTypes", activityTypes);
+  });
+
+  // Keep <html data-theme> in sync with the resolved theme (preference or, for
+  // "system", the live OS setting) so the CSS variables follow along.
+  $effect(() => {
+    document.documentElement.dataset.theme = themeState.resolved;
   });
 
   let status = $state("");

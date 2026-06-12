@@ -1,4 +1,5 @@
-:root {
+:root,
+:root[data-theme="dark"] {
   --bg: #0e1116;
   --panel: #161b22;
   --panel-2: #1c232c;
@@ -10,7 +11,29 @@
   --good: #57d977;
   --bad: #ff6b6b;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --on-accent: #04121c;
+  --accent-soft: rgba(76, 194, 255, 0.15);
+  --accent-line: rgba(76, 194, 255, 0.45);
+  color-scheme: dark;
   font-synthesis: none;
+}
+
+:root[data-theme="light"] {
+  --bg: #f6f8fa;
+  --panel: #ffffff;
+  --panel-2: #f0f3f6;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --muted: #57606a;
+  --accent: #0969da;
+  --accent-2: #bc4c00;
+  --good: #1a7f37;
+  --bad: #cf222e;
+  --shadow: 0 1px 3px rgba(140, 149, 159, 0.2);
+  --on-accent: #ffffff;
+  --accent-soft: rgba(9, 105, 218, 0.12);
+  --accent-line: rgba(9, 105, 218, 0.4);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -42,7 +65,7 @@ h1 { font-size: 1.4rem; margin: 0; letter-spacing: -0.01em; }
 
 .btn {
   background: var(--accent);
-  color: #04121c;
+  color: var(--on-accent);
   border: 0;
   border-radius: 8px;
   padding: 9px 16px;
@@ -141,9 +164,9 @@ tbody tr:hover { background: var(--panel-2); }
 }
 .chip:hover { color: var(--text); }
 .chip.active {
-  background: rgba(76, 194, 255, 0.15);
+  background: var(--accent-soft);
   color: var(--accent);
-  border-color: rgba(76, 194, 255, 0.45);
+  border-color: var(--accent-line);
 }
 .chip.all { font-weight: 600; }
 .chip.all.active { background: var(--panel-2); color: var(--muted); border-color: var(--border); }

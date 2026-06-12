@@ -77,6 +77,20 @@ export const median = (vs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
+// Partial weigh-ins — the cat stepping only partway onto the LR4 scale — record
+// a fraction of its real body weight (e.g. a lone 3.3 lbs for an ~11 lb cat).
+// They are sensor artifacts, not real readings, and a per-day median can't drop
+// one because it's often the only weigh-in that day. So reject anything well
+// outside a band around the robust (median) center BEFORE bucketing. The band is
+// generous (−40% / +60%) so genuine weight changes survive; only gross partials
+// fall outside it. `points` are [ms, lbs]; returns the same shape, filtered.
+export function rejectPartialWeighins(points) {
+  if (points.length < 4) return points; // too few to establish a robust center
+  const center = median(points.map((p) => p[1]));
+  if (!center) return points;
+  return points.filter(([, v]) => v >= center * 0.6 && v <= center * 1.6);
+}
+
 // Time-based 7-day trailing moving average over curated readings.
 export function movingAverage(points, windowDays = 7) {
   const win = windowDays * DAY;

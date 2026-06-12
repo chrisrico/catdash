@@ -1,13 +1,15 @@
 <script>
   import Chart from "./Chart.svelte";
   import { dayToLocalTime, bucketUnit, bucketBy, sum } from "./api.js";
-  import { COLORS, baseOption, timeAxis, valueAxis } from "./echarts.js";
+  import { palette, baseOption, timeAxis, valueAxis } from "./echarts.js";
+  import { themeState } from "./theme.svelte.js";
 
   let { usage } = $props();
 
   const DAY = 86400000;
 
   const option = $derived.by(() => {
+    const c = palette(themeState.resolved);
     const cyclesPts = usage.map((d) => [dayToLocalTime(d.date), d.cycles]);
     const weighinPts = usage.map((d) => [dayToLocalTime(d.date), d.weighins]);
     const span =
@@ -17,9 +19,9 @@
     const unit = bucketUnit(span);
 
     return {
-      ...baseOption,
-      xAxis: timeAxis,
-      yAxis: { ...valueAxis, minInterval: 1 },
+      ...baseOption(c),
+      xAxis: timeAxis(c),
+      yAxis: { ...valueAxis(c), minInterval: 1 },
       series: [
         {
           name: "Clean cycles",
@@ -27,7 +29,7 @@
           data: bucketBy(cyclesPts, unit, sum),
           barMaxWidth: 36,
           barMinHeight: 1,
-          itemStyle: { color: "rgba(76,194,255,0.55)", borderColor: COLORS.accent },
+          itemStyle: { color: c.barCycle, borderColor: c.accent },
         },
         {
           name: "Weigh-ins",
@@ -35,8 +37,8 @@
           data: bucketBy(weighinPts, unit, sum),
           smooth: 0.3,
           showSymbol: false,
-          itemStyle: { color: COLORS.good },
-          lineStyle: { color: COLORS.good, width: 2 },
+          itemStyle: { color: c.good },
+          lineStyle: { color: c.good, width: 2 },
         },
       ],
     };
