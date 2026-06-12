@@ -92,6 +92,9 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Wait (rather than immediately erroring) if another writer holds the lock —
+    # a manual collect can overlap the scheduled one. WAL keeps reads concurrent.
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         yield conn
         conn.commit()

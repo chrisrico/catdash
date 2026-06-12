@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -26,6 +27,42 @@ logger = logging.getLogger("app")
 BASE_DIR = Path(__file__).parent
 scheduler = AsyncIOScheduler()
 
+# In-process collection state. Collection takes several seconds — too long to
+# hold an HTTP response across some browsers (Firefox aborts the long request),
+# so the manual trigger starts it in the background and the dashboard polls
+# /api/collect/status. The lock prevents a manual run from overlapping the
+# scheduled one.
+_collect_lock = asyncio.Lock()
+_collect_state: dict = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "last_result": None,
+    "last_error": None,
+}
+
+
+async def run_collection() -> dict:
+    """Run one collection, recording status and never overlapping. Shared by
+    startup, the scheduler, and the manual trigger."""
+    if _collect_lock.locked():
+        logger.info("collection already running; skipping overlapping trigger")
+        return {"ok": False, "skipped": "already_running"}
+    async with _collect_lock:
+        _collect_state.update(running=True, started_at=time.time(), last_error=None)
+        try:
+            result = await collect()
+            _collect_state["last_result"] = result
+            if not result.get("ok"):
+                _collect_state["last_error"] = result.get("error")
+            return result
+        except Exception as exc:  # noqa: BLE001 - a collection must never crash the loop
+            logger.exception("collection crashed")
+            _collect_state["last_error"] = repr(exc)
+            return {"ok": False, "error": repr(exc)}
+        finally:
+            _collect_state.update(running=False, finished_at=time.time())
+
 
 def _find_static_dir() -> Path | None:
     """The built Svelte bundle: baked into catdash/static in Docker, or
@@ -46,9 +83,9 @@ async def lifespan(app: FastAPI):
     logger.info("DB ready at %s", settings.db_path)
 
     # Kick off an immediate collection, then run on the configured interval.
-    asyncio.create_task(collect())
+    asyncio.create_task(run_collection())
     scheduler.add_job(
-        collect,
+        run_collection,
         "interval",
         hours=settings.collect_interval_hours,
         id="collect",
@@ -147,9 +184,22 @@ async def api_stats(pet_id: str | None = Query(None)) -> dict:
 
 @app.post("/api/collect")
 async def api_collect() -> JSONResponse:
-    """Trigger a collection now (handy for testing / first-run backfill)."""
-    result = await collect()
-    return JSONResponse(result, status_code=200 if result.get("ok") else 502)
+    """Start a collection in the background and return immediately (202). The
+    work takes several seconds — too long to hold the response across some
+    browsers — so the client polls /api/collect/status for progress and result."""
+    if _collect_state["running"] or _collect_lock.locked():
+        return JSONResponse({"ok": True, "status": "already_running"}, status_code=202)
+    # Reflect "running" synchronously so the client's first status poll is
+    # consistent even before the background task has acquired the lock.
+    _collect_state["running"] = True
+    asyncio.create_task(run_collection())
+    return JSONResponse({"ok": True, "status": "started"}, status_code=202)
+
+
+@app.get("/api/collect/status")
+async def api_collect_status() -> dict:
+    """Current/most-recent collection state, for the dashboard to poll."""
+    return _collect_state
 
 
 @app.get("/")
