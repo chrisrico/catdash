@@ -11,7 +11,7 @@
     </thead>
     <tbody>
       {#if !activities.length}
-        <tr><td colspan="3" class="empty">No activity yet</td></tr>
+        <tr><td colspan="3" class="empty">No matching activity</td></tr>
       {:else}
         {#each activities as r}
           <tr>

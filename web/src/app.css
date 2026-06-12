@@ -127,3 +127,23 @@ tbody tr:hover { background: var(--panel-2); }
 
 .foot { color: var(--muted); font-size: 0.78rem; text-align: center; padding-top: 8px; }
 .empty { color: var(--muted); padding: 40px; text-align: center; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.chip:hover { color: var(--text); }
+.chip.active {
+  background: rgba(76, 194, 255, 0.15);
+  color: var(--accent);
+  border-color: rgba(76, 194, 255, 0.45);
+}
+.chip.all { font-weight: 600; }
+.chip.all.active { background: var(--panel-2); color: var(--muted); border-color: var(--border); }

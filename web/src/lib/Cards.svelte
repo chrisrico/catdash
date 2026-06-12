@@ -6,7 +6,10 @@
   const cards = $derived.by(() => {
     const w = stats.weight;
     const u = stats.usage;
-    const busiest = u.busiest_day;
+    const f = stats.feeder || {};
+    const flt = stats.faults || { count: 0, last: null };
+    const lf = f.last_feeding;
+
     const out = [
       {
         label: "Latest weight",
@@ -21,26 +24,15 @@
             : null,
       },
       {
-        label: "Weight range",
-        value: w.min != null ? `${w.min.toFixed(1)}–${w.max.toFixed(1)}` : "—",
-        unit: w.min != null ? " lbs" : "",
-      },
-      { label: "Weight readings", value: w.count ?? 0 },
-      { label: "Total clean cycles", value: u.total_cycles ?? 0 },
-      {
-        label: "Avg cycles / day",
-        value: u.avg_cycles != null ? u.avg_cycles.toFixed(1) : "—",
-      },
-      {
-        label: "Busiest day",
-        value: busiest ? busiest.cycles : "—",
-        unit: busiest ? " cycles" : "",
-        delta: busiest ? { cls: "flat", text: busiest.date } : null,
+        label: "Clean cycles",
+        value: u.total_cycles ?? 0,
+        delta:
+          u.avg_cycles != null
+            ? { cls: "flat", text: `${u.avg_cycles.toFixed(1)} / day avg` }
+            : null,
       },
     ];
 
-    const f = stats.feeder || {};
-    const lf = f.last_feeding;
     if (f.feedings || f.food_level != null) {
       out.push(
         {
@@ -52,22 +44,21 @@
           label: "Fed (last 24h)",
           value: f.last_24h_cups != null ? Number(f.last_24h_cups).toFixed(2) : "—",
           unit: f.last_24h_cups != null ? " cups" : "",
-          delta: f.last_24h_feedings
-            ? {
-                cls: "flat",
-                text: `${f.last_24h_feedings} feeding${f.last_24h_feedings === 1 ? "" : "s"}`,
-              }
-            : null,
-        },
-        {
-          label: "Last feeding",
-          value: lf ? lf.name : "—",
           delta: lf
-            ? { cls: "flat", text: `${fmtCups(lf.amount_cups)} · ${fmtDateTime(lf.timestamp)}` }
+            ? { cls: "flat", text: `last: ${lf.name} · ${fmtDateTime(lf.timestamp)}` }
             : null,
         }
       );
     }
+
+    out.push({
+      label: "Faults",
+      value: flt.count ?? 0,
+      delta: flt.last
+        ? { cls: "up", text: `last: ${flt.last.action} · ${fmtDateTime(flt.last.timestamp)}` }
+        : { cls: "flat", text: "none recorded" },
+    });
+
     return out;
   });
 </script>

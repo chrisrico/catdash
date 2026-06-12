@@ -1,17 +1,31 @@
 <script>
-  import { fetchJSON, rangeToStart } from "./lib/api.js";
+  import { fetchJSON, rangeToStart, ACTIVITY_CATEGORIES } from "./lib/api.js";
+  import { loadPersisted, savePersisted } from "./lib/persist.js";
   import Controls from "./lib/Controls.svelte";
   import Cards from "./lib/Cards.svelte";
   import WeightChart from "./lib/WeightChart.svelte";
   import UsageChart from "./lib/UsageChart.svelte";
   import FeederChart from "./lib/FeederChart.svelte";
+  import ActivityFilter from "./lib/ActivityFilter.svelte";
   import ActivityTable from "./lib/ActivityTable.svelte";
 
   let pets = $state([]);
-  let petId = $state("");
-  let range = $state("all");
-  let showRaw = $state(false);
+  // UI selections persist to localStorage (see the $effect below). Add a new
+  // option here with loadPersisted(...) and a savePersisted line to persist it.
+  let petId = $state(loadPersisted("petId", ""));
+  let range = $state(loadPersisted("range", "all"));
+  let showRaw = $state(loadPersisted("showRaw", false));
+  let activityTypes = $state(
+    loadPersisted("activityTypes", ACTIVITY_CATEGORIES.map((c) => c.key))
+  );
   let ready = $state(false);
+
+  $effect(() => {
+    savePersisted("petId", petId);
+    savePersisted("range", range);
+    savePersisted("showRaw", showRaw);
+    savePersisted("activityTypes", activityTypes);
+  });
 
   let status = $state("");
   let statusError = $state(false);
@@ -59,13 +73,27 @@
     await Promise.all([
       loadSection("weights", `/api/weights?${qs}${petQs}`),
       loadSection("usage", `/api/usage?${qs}`),
-      loadSection("activities", `/api/activities?${qs}&limit=300`),
       loadSection("food", `/api/food?${qs}`),
       loadSection("stats", `/api/stats?${petId ? `pet_id=${encodeURIComponent(petId)}` : ""}`),
+      loadActivities(),
     ]);
     const failed = Object.values(sections).filter((s) => s.error).length;
     status = failed ? `${failed} section${failed === 1 ? "" : "s"} failed to load` : "";
     statusError = failed > 0;
+  }
+
+  // Activity feed loads separately so toggling category chips refetches only it.
+  async function loadActivities() {
+    if (activityTypes.length === 0) {
+      sections.activities = { data: [], error: null };
+      return;
+    }
+    const qs = new URLSearchParams();
+    const start = rangeToStart(range);
+    if (start) qs.set("start", start);
+    qs.set("limit", "300");
+    qs.set("types", activityTypes.join(","));
+    await loadSection("activities", `/api/activities?${qs}`);
   }
 
   async function loadPets() {
@@ -111,6 +139,12 @@
     if (ready) refresh();
   });
 
+  $effect(() => {
+    // Refetch just the activity feed when the category filter changes.
+    void activityTypes;
+    if (ready) loadActivities();
+  });
+
   loadPets();
 </script>
 
@@ -139,7 +173,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Weight</h2>
-    <span class="hint">Curated SmartScale readings · 7-day average · raw weigh-ins</span>
+    <span class="hint">Weigh-in trend (median per bucket) · 7-day average · raw weigh-ins</span>
   </div>
   {#if sections.weights.data}
     <WeightChart weights={sections.weights.data} {showRaw} />
@@ -163,7 +197,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Feeder</h2>
-    <span class="hint">Food dispensed per day &amp; hopper level</span>
+    <span class="hint">Food dispensed (bucketed by range) &amp; hopper level over time</span>
   </div>
   {#if sections.food.data}
     <FeederChart food={sections.food.data} />
@@ -173,7 +207,10 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>Recent activity</h2></div>
+  <div class="panel-head">
+    <h2>Recent activity</h2>
+    <ActivityFilter bind:selected={activityTypes} />
+  </div>
   {#if sections.activities.data}
     <ActivityTable activities={sections.activities.data} />
   {:else if sections.activities.error}
