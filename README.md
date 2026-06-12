@@ -39,9 +39,55 @@ Open **http://localhost:8080** (or your server's IP). On first launch it backfil
 everything Whisker still has, then keeps appending on schedule. Click **Collect
 now** any time to pull immediately.
 
-Data lives in the `catdash_data` Docker volume (`/data/catdash.db`), so it survives
-`docker compose down` / rebuilds. To change the schedule or port, set
-`COLLECT_INTERVAL_HOURS` / `PORT` / `TZ` in `.env`.
+Data persists across `docker compose down` and rebuilds. By default it lives in a
+Docker-managed `catdash_data` volume; set `DATA_DIR` to a host folder to keep the
+SQLite DB somewhere you can back it up (see [Deploying in production](#deploying-in-production)).
+Tune the schedule, port, and timezone via `.env` — see [Configuration](#configuration).
+
+## Deploying in production
+
+The Docker image is the supported deployment — run it on whatever's always on (a
+NAS, home server, or VPS):
+
+```bash
+git clone https://github.com/chrisrico/catdash.git && cd catdash
+cp .env.example .env          # add Whisker credentials; optionally set DATA_DIR
+docker compose up --build -d
+```
+
+The container has a healthcheck and `restart: unless-stopped`, so it comes back on
+its own after a reboot or crash.
+
+**Data & backups.** The SQLite DB is the whole point — the permanent history you
+can't re-fetch from Whisker. Keep it in a host folder you already back up by
+setting a path in `.env` *before first start*:
+
+```bash
+DATA_DIR=/volume1/docker/catdash   # e.g. a Synology shared folder
+```
+
+Leaving `DATA_DIR` unset stores it in a Docker-managed `catdash_data` volume
+instead. Either way, back up `catdash.db` on your normal schedule.
+
+**Updating** — pull and rebuild; your data is untouched:
+
+```bash
+git pull && docker compose up --build -d
+```
+
+**Logs & health:**
+
+```bash
+docker compose logs -f          # follow collector + request logs
+docker compose ps               # container state + health
+curl localhost:8080/healthz     # -> {"status":"ok"}
+```
+
+**Exposure.** The dashboard is plain HTTP on port `8080` with **no authentication** —
+anyone who can reach it sees your data and the *Collect now* button. Keep it on your
+LAN, or front it with a reverse proxy that adds TLS and auth (Caddy, nginx, or
+Synology's built-in reverse proxy) before exposing it to the internet. Change the
+published port with `PORT` in `.env`.
 
 ## Configuration
 
@@ -52,11 +98,12 @@ All via environment variables (see [`.env.example`](.env.example)):
 | `WHISKER_EMAIL` / `WHISKER_PASSWORD` | — | Whisker account credentials (**required**) |
 | `COLLECT_INTERVAL_HOURS`             | `6` | How often to pull from Whisker |
 | `PORT`                               | `8080` | Dashboard port |
-| `TZ`                                 | `UTC` | Container timezone |
+| `TZ`                                 | _(host)_ | Timezone for log timestamps; defaults to the host's (via the `/etc/localtime` mount) — set to override |
 | `ACTIVITY_LIMIT`                     | `50000` | Max activity rows requested per robot per run (the first backfill is large; later runs are incremental) |
 | `WEIGHT_LIMIT`                       | `5000` | Per-pet weight measurements per run |
 | `INSIGHT_DAYS`                       | `365` | Days of daily clean-cycle history requested (auto-clamped to the robot's setup date) |
-| `DB_PATH`                            | `/data/catdash.db` | SQLite location |
+| `DATA_DIR`                           | _(named volume)_ | Host folder for the DB (compose only); unset → a Docker-managed volume |
+| `DB_PATH`                            | `/data/catdash.db` | SQLite path **inside** the container |
 
 ## API
 
