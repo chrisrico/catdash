@@ -18,6 +18,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# The process holds Whisker credentials in its environment, so it runs as a
+# non-root user — an app or dependency compromise shouldn't also hand out root.
+RUN useradd --uid 1000 --create-home app
+
 # uv for fast, reproducible dependency installs from the lockfile.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
@@ -34,6 +38,12 @@ RUN uv sync --frozen --no-dev
 
 COPY catdash ./catdash
 COPY --from=web /web/dist ./catdash/static
+
+# /data must be owned by `app` in the image so fresh named volumes inherit it.
+# Volumes created by older (root-running) versions need a one-time
+# `chown -R app:app /data` — see "Updating" in the README.
+RUN mkdir -p /data && chown app:app /data
+USER app
 
 VOLUME ["/data"]
 EXPOSE 8080

@@ -1,8 +1,7 @@
 """Configuration loaded from environment variables (and a local .env file).
 
 In Docker, values come from the compose `env_file`; locally, python-dotenv loads
-the project-root .env. Whisker credentials use the `username`/`password` keys to
-match the existing .env, with WHISKER_EMAIL/WHISKER_PASSWORD as fallbacks.
+the project-root .env. Whisker credentials come from WHISKER_EMAIL/WHISKER_PASSWORD.
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ class Settings:
     username: str
     password: str
     collect_interval_hours: float
+    refresh_cooldown_minutes: int
     activity_limit: int
     weight_limit: int
     insight_days: int
@@ -46,6 +46,7 @@ def get_settings() -> Settings:
         username=os.environ.get("WHISKER_EMAIL") or "",
         password=os.environ.get("WHISKER_PASSWORD") or "",
         collect_interval_hours=float(os.environ.get("COLLECT_INTERVAL_HOURS") or 6),
+        refresh_cooldown_minutes=_int("REFRESH_COOLDOWN_MINUTES", 10),
         activity_limit=_int("ACTIVITY_LIMIT", 50000),
         weight_limit=_int("WEIGHT_LIMIT", 5000),
         insight_days=_int("INSIGHT_DAYS", 365),

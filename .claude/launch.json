@@ -8,6 +8,12 @@
       "port": 8080
     },
     {
+      "name": "dashboard-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["WHISKER_EMAIL=", "WHISKER_PASSWORD=", "DB_PATH=/tmp/catdash-test.db", "uv", "run", "uvicorn", "catdash.main:app", "--host", "127.0.0.1", "--port", "8903"],
+      "port": 8903
+    },
+    {
       "name": "web",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "web", "run", "dev"],

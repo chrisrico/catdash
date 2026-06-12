@@ -57,8 +57,10 @@ async def run_collection() -> dict:
             return result
         except Exception as exc:  # noqa: BLE001 - a collection must never crash the loop
             logger.exception("collection crashed")
-            _collect_state["last_error"] = repr(exc)
-            return {"ok": False, "error": repr(exc)}
+            # /api/refresh/status is unauthenticated, so expose only the
+            # exception class; the full traceback stays in the logs.
+            _collect_state["last_error"] = type(exc).__name__
+            return {"ok": False, "error": type(exc).__name__}
         finally:
             _collect_state.update(running=False, finished_at=time.time())
 
@@ -99,7 +101,11 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="Catdash", lifespan=lifespan)
+# Interactive docs are off: the API is documented in the README, and a deployment
+# reachable beyond localhost shouldn't advertise a "Try it out" console for it.
+app = FastAPI(
+    title="Catdash", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
+)
 if STATIC_DIR is not None:
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -109,13 +115,16 @@ async def healthz() -> dict:
     return {"status": "ok"}
 
 
+# The read endpoints are deliberately sync (`def`, not `async def`): FastAPI runs
+# them in its threadpool, so the blocking SQLite reads can't stall the event loop
+# that the scheduler and collector share.
 @app.get("/api/pets")
-async def api_pets() -> list[dict]:
+def api_pets() -> list[dict]:
     return db.get_pets()
 
 
 @app.get("/api/weights")
-async def api_weights(
+def api_weights(
     pet_id: str | None = Query(None),
     start: str | None = Query(None),
     end: str | None = Query(None),
@@ -127,7 +136,7 @@ async def api_weights(
 
 
 @app.get("/api/usage")
-async def api_usage(
+def api_usage(
     start: str | None = Query(None),
     end: str | None = Query(None),
 ) -> list[dict]:
@@ -135,7 +144,7 @@ async def api_usage(
 
 
 @app.get("/api/activities")
-async def api_activities(
+def api_activities(
     start: str | None = Query(None),
     end: str | None = Query(None),
     limit: int = Query(200, ge=1, le=2000),
@@ -146,7 +155,7 @@ async def api_activities(
 
 
 @app.get("/api/feedings")
-async def api_feedings(
+def api_feedings(
     start: str | None = Query(None),
     end: str | None = Query(None),
     limit: int = Query(500, ge=1, le=5000),
@@ -155,7 +164,7 @@ async def api_feedings(
 
 
 @app.get("/api/food")
-async def api_food(
+def api_food(
     start: str | None = Query(None),
     end: str | None = Query(None),
 ) -> dict:
@@ -167,7 +176,7 @@ async def api_food(
 
 
 @app.get("/api/faults")
-async def api_faults(
+def api_faults(
     start: str | None = Query(None),
     end: str | None = Query(None),
     limit: int = Query(200, ge=1, le=2000),
@@ -177,7 +186,7 @@ async def api_faults(
 
 
 @app.get("/api/stats")
-async def api_stats(pet_id: str | None = Query(None)) -> dict:
+def api_stats(pet_id: str | None = Query(None)) -> dict:
     return db.get_stats(pet_id=pet_id)
 
 
@@ -192,6 +201,21 @@ async def api_refresh() -> JSONResponse:
     client polls /api/refresh/status for progress and the result."""
     if _collect_state["running"] or _collect_lock.locked():
         return JSONResponse({"ok": True, "status": "already_running"}, status_code=202)
+    # Cooldown: this endpoint is unauthenticated and each collection performs a
+    # fresh credentialed login to Whisker, so without a floor between runs anyone
+    # who can reach the dashboard could drive thousands of logins a day against
+    # the account — indistinguishable from credential stuffing, and a lockout
+    # loses history that rolls off Whisker's servers within days. The scheduled
+    # collection bypasses this (it calls run_collection directly).
+    cooldown = get_settings().refresh_cooldown_minutes * 60
+    finished_at = _collect_state["finished_at"]
+    if cooldown and finished_at is not None and (elapsed := time.time() - finished_at) < cooldown:
+        retry_after = max(1, int(cooldown - elapsed))
+        return JSONResponse(
+            {"ok": False, "status": "cooldown", "retry_after_seconds": retry_after},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
     # Reflect "running" synchronously so the client's first status poll is
     # consistent even before the background task has acquired the lock.
     _collect_state["running"] = True

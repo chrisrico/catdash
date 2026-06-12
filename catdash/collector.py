@@ -362,7 +362,9 @@ async def collect() -> dict:
         return summary
     except Exception as exc:  # noqa: BLE001
         logger.exception("collection failed")
-        return {"ok": False, "error": repr(exc)}
+        # The summary surfaces on the unauthenticated /api/refresh/status, so
+        # expose only the exception class; the full traceback is in the logs.
+        return {"ok": False, "error": type(exc).__name__}
     finally:
         try:
             await account.disconnect()

@@ -161,6 +161,15 @@
     statusError = false;
     try {
       const res = await startCollect();
+      if (res.status === 429) {
+        // Manual collections have a server-side cooldown (see /api/refresh);
+        // a recent run means the data is already fresh.
+        const body = await res.json().catch(() => null);
+        const mins = Math.max(1, Math.ceil((body?.retry_after_seconds ?? 60) / 60));
+        status = `Collected recently — try again in ${mins} min`;
+        statusError = true;
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const result = await awaitCollection();
       if (result && result.ok) {

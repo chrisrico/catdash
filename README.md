@@ -83,6 +83,14 @@ instead. Either way, back up `catdash.db` on your normal schedule.
 docker compose pull && docker compose up -d
 ```
 
+> **Upgrading from a version that ran as root:** the container now runs as a
+> non-root user (uid 1000), so a DB created by an older version is root-owned
+> and unwritable until you fix ownership once:
+>
+> ```bash
+> docker compose run --rm --user root dashboard chown -R app:app /data
+> ```
+
 **Logs & health:**
 
 ```bash
@@ -92,10 +100,14 @@ curl localhost:8080/healthz     # -> {"status":"ok"}
 ```
 
 **Exposure.** The dashboard is plain HTTP on port `8080` with **no authentication** —
-anyone who can reach it sees your data and the *Collect now* button. Keep it on your
-LAN, or front it with a reverse proxy that adds TLS and auth (Caddy, nginx, or
-Synology's built-in reverse proxy) before exposing it to the internet. Change the
-published port with `PORT` in `.env`.
+anyone who can reach it sees your data and the *Collect now* button (manual
+collections are rate-limited by `REFRESH_COOLDOWN_MINUTES` so strangers can't hammer
+Whisker with your credentials). The recommended way to reach it from outside your
+LAN is [Tailscale](https://tailscale.com) (or any VPN): install it on the host and
+on your devices, open `http://<host>:8080` over the tailnet, and nothing is exposed
+to the public internet. If you genuinely want it public, front it with a reverse
+proxy that adds TLS and auth (Caddy, nginx, or Synology's built-in reverse proxy).
+Change the published port with `PORT` in `.env`.
 
 **Building it yourself.** A GitHub Actions workflow
 ([`.github/workflows/publish.yml`](.github/workflows/publish.yml)) builds the image
@@ -111,6 +123,7 @@ All via environment variables (see [`.env.example`](.env.example)):
 |--------------------------------------| --- | --- |
 | `WHISKER_EMAIL` / `WHISKER_PASSWORD` | — | Whisker account credentials (**required**) |
 | `COLLECT_INTERVAL_HOURS`             | `6` | How often to pull from Whisker |
+| `REFRESH_COOLDOWN_MINUTES`           | `10` | Minimum minutes between manual *Collect now* runs (`429` inside the window; `0` disables) |
 | `PORT`                               | `8080` | Dashboard port |
 | `TZ`                                 | _(host)_ | Timezone for log timestamps; defaults to the host's (via the `/etc/localtime` mount) — set to override |
 | `ACTIVITY_LIMIT`                     | `50000` | Max activity rows requested per robot per run (the first backfill is large; later runs are incremental) |
@@ -131,8 +144,10 @@ The dashboard is built on a small JSON API you can also use directly:
 - `GET /api/food?start=&end=` — `{daily, levels}` cups dispensed + hopper level
 - `GET /api/stats?pet_id=` — summary stats (weight + usage + feeder)
 - `POST /api/refresh` — start a collection now (returns `202` immediately; runs in
-  the background — poll `GET /api/refresh/status` for progress/result). Named
-  `refresh`, not `collect`, so ad blockers don't cancel it as an analytics beacon.
+  the background — poll `GET /api/refresh/status` for progress/result). Returns
+  `429` with `retry_after_seconds` within `REFRESH_COOLDOWN_MINUTES` of the last
+  run. Named `refresh`, not `collect`, so ad blockers don't cancel it as an
+  analytics beacon.
 - `GET /healthz` — health check
 
 ## Local development
