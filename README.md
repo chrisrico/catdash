@@ -30,30 +30,38 @@ offline / on isolated networks).
 
 ## Quick start (Docker)
 
+No clone, no build — the image is published to GHCR, so two files in an empty
+folder are all you need:
+
 ```bash
-cp .env.example .env          # then edit .env with your Whisker email + password
-docker compose up --build -d
+mkdir catdash && cd catdash
+curl -O https://raw.githubusercontent.com/chrisrico/catdash/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/chrisrico/catdash/main/.env.example
+# edit .env: add your Whisker email + password (optionally set DATA_DIR / PORT / TZ)
+docker compose up -d
 ```
 
+`docker compose up` pulls the prebuilt `ghcr.io/chrisrico/catdash:latest` image.
 Open **http://localhost:8080** (or your server's IP). On first launch it backfills
 everything Whisker still has, then keeps appending on schedule. Click **Collect
 now** any time to pull immediately.
 
-Data persists across `docker compose down` and rebuilds. By default it lives in a
+Data persists across `docker compose down` and updates. By default it lives in a
 Docker-managed `catdash_data` volume; set `DATA_DIR` to a host folder to keep the
 SQLite DB somewhere you can back it up (see [Deploying in production](#deploying-in-production)).
 Tune the schedule, port, and timezone via `.env` — see [Configuration](#configuration).
 
 ## Deploying in production
 
-The Docker image is the supported deployment — run it on whatever's always on (a
-NAS, home server, or VPS):
+The published image is the supported deployment — run it on whatever's always on
+(a NAS, home server, or VPS). Nothing to clone or build on the host: you only need
+the `docker-compose.yml` and a `.env` from the [Quick start](#quick-start-docker)
+above.
 
-```bash
-git clone https://github.com/chrisrico/catdash.git && cd catdash
-cp .env.example .env          # add Whisker credentials; optionally set DATA_DIR
-docker compose up --build -d
-```
+**Synology / Container Manager.** Make a folder for the app (e.g.
+`/volume1/docker/catdash`), put `docker-compose.yml` + `.env` in it, then either run
+`docker compose up -d` over SSH, or create a **Container Manager → Project** pointed
+at that folder — no SSH and no source required.
 
 The container has a healthcheck and `restart: unless-stopped`, so it comes back on
 its own after a reboot or crash.
@@ -69,10 +77,10 @@ DATA_DIR=/volume1/docker/catdash   # e.g. a Synology shared folder
 Leaving `DATA_DIR` unset stores it in a Docker-managed `catdash_data` volume
 instead. Either way, back up `catdash.db` on your normal schedule.
 
-**Updating** — pull and rebuild; your data is untouched:
+**Updating** — pull the new image and recreate; your data is untouched:
 
 ```bash
-git pull && docker compose up --build -d
+docker compose pull && docker compose up -d
 ```
 
 **Logs & health:**
@@ -88,6 +96,12 @@ anyone who can reach it sees your data and the *Collect now* button. Keep it on 
 LAN, or front it with a reverse proxy that adds TLS and auth (Caddy, nginx, or
 Synology's built-in reverse proxy) before exposing it to the internet. Change the
 published port with `PORT` in `.env`.
+
+**Building it yourself.** A GitHub Actions workflow
+([`.github/workflows/publish.yml`](.github/workflows/publish.yml)) builds the image
+and pushes `ghcr.io/<owner>/catdash:latest` on every push to `main`. To build
+locally instead: `docker build -t ghcr.io/chrisrico/catdash:latest .` (then
+`docker compose up -d`), or run it without Docker via [Local development](#local-development).
 
 ## Configuration
 
