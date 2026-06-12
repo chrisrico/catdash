@@ -28,10 +28,9 @@ BASE_DIR = Path(__file__).parent
 scheduler = AsyncIOScheduler()
 
 # In-process collection state. Collection takes several seconds — too long to
-# hold an HTTP response across some browsers (Firefox aborts the long request),
-# so the manual trigger starts it in the background and the dashboard polls
-# /api/collect/status. The lock prevents a manual run from overlapping the
-# scheduled one.
+# hold an HTTP response open — so the manual trigger starts it in the background
+# and the dashboard polls /api/refresh/status. The lock prevents a manual run
+# from overlapping the scheduled one.
 _collect_lock = asyncio.Lock()
 _collect_state: dict = {
     "running": False,
@@ -182,11 +181,15 @@ async def api_stats(pet_id: str | None = Query(None)) -> dict:
     return db.get_stats(pet_id=pet_id)
 
 
-@app.post("/api/collect")
-async def api_collect() -> JSONResponse:
+# Named /api/refresh, NOT /api/collect: ad blockers (uBlock/EasyPrivacy, Firefox
+# tracking protection) cancel requests to a "/collect" path because it matches
+# analytics-beacon filters (Google Analytics posts to /collect). That silently
+# breaks the button — the request never leaves the browser — so we avoid the path.
+@app.post("/api/refresh")
+async def api_refresh() -> JSONResponse:
     """Start a collection in the background and return immediately (202). The
-    work takes several seconds — too long to hold the response across some
-    browsers — so the client polls /api/collect/status for progress and result."""
+    work takes several seconds — too long to hold the response open — so the
+    client polls /api/refresh/status for progress and the result."""
     if _collect_state["running"] or _collect_lock.locked():
         return JSONResponse({"ok": True, "status": "already_running"}, status_code=202)
     # Reflect "running" synchronously so the client's first status poll is
@@ -196,8 +199,8 @@ async def api_collect() -> JSONResponse:
     return JSONResponse({"ok": True, "status": "started"}, status_code=202)
 
 
-@app.get("/api/collect/status")
-async def api_collect_status() -> dict:
+@app.get("/api/refresh/status")
+async def api_refresh_status() -> dict:
     """Current/most-recent collection state, for the dashboard to poll."""
     return _collect_state
 
@@ -210,4 +213,11 @@ async def index():
             "(or use `npm run dev` for the Vite dev server).",
             status_code=503,
         )
-    return FileResponse(STATIC_DIR / "index.html")
+    # index.html references hash-named assets, so it must never be cached stale —
+    # otherwise a browser keeps loading an old bundle after a rebuild. Force a
+    # revalidation each load (the assets under /static are content-hashed and may
+    # cache forever). no-store is belt-and-suspenders for Firefox's heuristic cache.
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )

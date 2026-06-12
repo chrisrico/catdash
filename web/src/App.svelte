@@ -115,16 +115,17 @@
     }
   }
 
-  // /api/collect runs for several seconds — too long to hold an HTTP response
-  // across some browsers (Firefox aborts the long request → "NetworkError ...
-  // fetch resource"). So the POST only *starts* the collection and returns
-  // immediately; we then poll /api/collect/status until the background run
-  // finishes. The POST is short-lived, so a stale-keep-alive failure is retried
+  // Collection runs for several seconds — too long to hold an HTTP response
+  // open — so the POST only *starts* it (returning immediately) and we poll
+  // /api/refresh/status until the background run finishes. The endpoint is named
+  // /api/refresh, not /api/collect, because ad blockers cancel POSTs to a
+  // "/collect" path (it matches analytics-beacon filters), which silently breaks
+  // the button. The POST is short-lived, so a stale keep-alive failure is retried
   // a couple times on a fresh connection (collection is idempotent).
   async function startCollect(retries = 2) {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await fetch("/api/collect", { method: "POST" });
+        return await fetch("/api/refresh", { method: "POST" });
       } catch (err) {
         console.warn(
           `[catdash] collect POST network error (attempt ${attempt + 1}/${retries + 1}):`,
@@ -142,7 +143,7 @@
       await new Promise((r) => setTimeout(r, intervalMs));
       let s;
       try {
-        s = await fetchJSON("/api/collect/status");
+        s = await fetchJSON("/api/refresh/status");
       } catch (err) {
         console.warn("[catdash] collect status poll failed, retrying:", err);
         continue; // transient; keep waiting

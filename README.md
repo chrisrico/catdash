@@ -17,9 +17,10 @@ stores it **permanently** — so you keep a full history instead of the rolling
     snapshots over time.
 - **Stores** everything in a SQLite database on a persistent volume. All writes are
   idempotent, so overlapping runs never duplicate rows.
-- **Visualizes** it: a weight chart (curated readings + 7-day average + optional raw
-  weigh-ins), a usage chart (cycles + weigh-ins per day), a feeder chart (cups
-  dispensed per day + hopper level), summary stat cards, and a recent-activity feed.
+- **Visualizes** it: a weight chart (weigh-in trend + 7-day average, with raw
+  weigh-ins toggleable from the legend), a usage chart (cycles + weigh-ins per day),
+  a feeder chart (cups dispensed per day + hopper level), summary stat cards, and a
+  recent-activity feed. Light/dark theme follows the OS.
 
 Runs as **one small container, one process** — a FastAPI app that both serves the
 dashboard and runs the scheduled collector in-process (no cron, no second service).
@@ -52,7 +53,7 @@ All via environment variables (see [`.env.example`](.env.example)):
 | `COLLECT_INTERVAL_HOURS`             | `6` | How often to pull from Whisker |
 | `PORT`                               | `8080` | Dashboard port |
 | `TZ`                                 | `UTC` | Container timezone |
-| `ACTIVITY_LIMIT`                     | `1000` | Activity rows requested per robot per run |
+| `ACTIVITY_LIMIT`                     | `50000` | Max activity rows requested per robot per run (the first backfill is large; later runs are incremental) |
 | `WEIGHT_LIMIT`                       | `5000` | Per-pet weight measurements per run |
 | `INSIGHT_DAYS`                       | `365` | Days of daily clean-cycle history requested (auto-clamped to the robot's setup date) |
 | `DB_PATH`                            | `/data/catdash.db` | SQLite location |
@@ -68,7 +69,9 @@ The dashboard is built on a small JSON API you can also use directly:
 - `GET /api/feedings?start=&end=&limit=` — feeder meal/snack events
 - `GET /api/food?start=&end=` — `{daily, levels}` cups dispensed + hopper level
 - `GET /api/stats?pet_id=` — summary stats (weight + usage + feeder)
-- `POST /api/collect` — trigger a collection now
+- `POST /api/refresh` — start a collection now (returns `202` immediately; runs in
+  the background — poll `GET /api/refresh/status` for progress/result). Named
+  `refresh`, not `collect`, so ad blockers don't cancel it as an analytics beacon.
 - `GET /healthz` — health check
 
 ## Local development
@@ -93,11 +96,14 @@ Node stage and bakes the bundle in; the runtime image has no Node at all.
 
 ## How weights work (and the `3.3 lbs` mystery)
 
-Whisker's SmartScale sometimes records partial/spurious weigh-ins (e.g. a cat
-half-on the scale). The **curated** per-pet series filters these out and is what the
-weight chart shows by default. The **raw** weigh-ins (every `Pet Weight Recorded`
-event from the activity stream) are still stored and viewable via the *“Show raw
-weigh-ins”* toggle — nothing is discarded.
+Whisker's SmartScale sometimes records implausible weigh-ins — a cat half-on the
+scale reads far low (the infamous `3.3 lbs`), a double/glitch weigh-in reads far
+high. The weight chart builds its trend from the raw weigh-ins (median per
+day/week/month bucket) but first drops these artifacts: any reading deviating more
+than ~15% from the rolling median of its time-neighbors is rejected — in either
+direction — while genuine slow drift is kept. The raw weigh-ins are always stored
+(nothing is discarded) and can be shown on the chart by toggling the **Raw
+weigh-ins** series in its legend.
 
 With a single cat, every weigh-in belongs to that cat. With multiple cats, Whisker's
 own per-pet attribution is used, so each cat gets its own series automatically.
