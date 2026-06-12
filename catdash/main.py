@@ -103,8 +103,10 @@ async def api_activities(
     start: str | None = Query(None),
     end: str | None = Query(None),
     limit: int = Query(200, ge=1, le=2000),
+    types: str | None = Query(None, description="Comma-separated category keys"),
 ) -> list[dict]:
-    return db.get_activities(start=start, end=end, limit=limit)
+    categories = [t for t in types.split(",") if t] if types else None
+    return db.get_activities(start=start, end=end, limit=limit, categories=categories)
 
 
 @app.get("/api/feedings")
@@ -126,6 +128,16 @@ async def api_food(
         "daily": db.get_daily_food(start=start, end=end),
         "levels": db.get_food_levels(start=start, end=end),
     }
+
+
+@app.get("/api/faults")
+async def api_faults(
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=2000),
+) -> list[dict]:
+    """Fault events (Drawer Full, *Fault, Pinch Detect) from the activity stream."""
+    return db.get_faults(start=start, end=end, limit=limit)
 
 
 @app.get("/api/stats")

@@ -309,12 +309,42 @@ def get_usage(
     ]
 
 
+# Faults are LitterBoxStatus error events that arrive in the activity stream
+# (Drawer Full, *Fault, Pinch Detect, ...). They are a view over `activities`,
+# not a separate table — so the activity backfill captures them retroactively.
+_FAULT_WHERE = (
+    "(action LIKE '%Fault%' OR action LIKE 'Drawer %Full%' OR action LIKE 'Pinch Detect%')"
+)
+
+# Activity categories for the dashboard's multiselect filter: key -> SQL predicate.
+# "other" (handled below) matches anything none of these do.
+ACTIVITY_CATEGORIES = {
+    "weigh_in": "action LIKE 'Pet Weight Recorded%'",
+    "clean_cycle": "action LIKE 'Clean Cycle %'",
+    "cat_detected": "action = 'Cat Detected'",
+    "litter_dispensed": "action LIKE 'Litter Dispensed%'",
+    "fault": _FAULT_WHERE,
+}
+
+
+def _category_clause(categories: list[str]) -> str:
+    """Build an OR'd SQL predicate for the selected activity categories."""
+    known = [ACTIVITY_CATEGORIES[c] for c in categories if c in ACTIVITY_CATEGORIES]
+    conds = list(known)
+    if "other" in categories:
+        conds.append("NOT (" + " OR ".join(ACTIVITY_CATEGORIES.values()) + ")")
+    return "(" + " OR ".join(conds) + ")" if conds else ""
+
+
 def get_activities(
     start: str | None = None,
     end: str | None = None,
     limit: int = 200,
+    categories: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     where, params = _range("timestamp", start, end)
+    if categories and (clause := _category_clause(categories)):
+        where = f"{where} AND {clause}" if where else f" WHERE {clause}"
     with connect() as conn:
         rows = conn.execute(
             f"""SELECT timestamp, action, weight_lbs FROM activities
@@ -322,6 +352,12 @@ def get_activities(
             [*params, limit],
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_faults(
+    start: str | None = None, end: str | None = None, limit: int = 200
+) -> list[dict[str, Any]]:
+    return get_activities(start=start, end=end, limit=limit, categories=["fault"])
 
 
 def get_feedings(
@@ -409,6 +445,13 @@ def get_stats(pet_id: str | None = None) -> dict[str, Any]:
         food = conn.execute(
             "SELECT level, timestamp FROM food_level ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
+        faults = conn.execute(
+            f"SELECT COUNT(*) AS count FROM activities WHERE {_FAULT_WHERE}"
+        ).fetchone()
+        last_fault = conn.execute(
+            f"SELECT timestamp, action FROM activities WHERE {_FAULT_WHERE} "
+            "ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
 
     latest_w = latest["weight_lbs"] if latest else None
     earliest_w = earliest["weight_lbs"] if earliest else None
@@ -441,5 +484,9 @@ def get_stats(pet_id: str | None = None) -> dict[str, Any]:
             "last_24h_cups": round(recent["cups"], 4) if recent else 0,
             "last_24h_feedings": recent["n"] if recent else 0,
             "last_feeding": dict(last_feeding) if last_feeding else None,
+        },
+        "faults": {
+            "count": faults["count"] if faults else 0,
+            "last": dict(last_fault) if last_fault else None,
         },
     }

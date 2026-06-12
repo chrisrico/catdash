@@ -46,9 +46,9 @@ def get_settings() -> Settings:
         username=os.environ.get("WHISKER_EMAIL") or "",
         password=os.environ.get("WHISKER_PASSWORD") or "",
         collect_interval_hours=float(os.environ.get("COLLECT_INTERVAL_HOURS") or 6),
-        activity_limit=_int("ACTIVITY_LIMIT", 1000),
-        weight_limit=_int("WEIGHT_LIMIT", 500),
-        insight_days=_int("INSIGHT_DAYS", 30),
+        activity_limit=_int("ACTIVITY_LIMIT", 50000),
+        weight_limit=_int("WEIGHT_LIMIT", 5000),
+        insight_days=_int("INSIGHT_DAYS", 365),
         db_path=os.environ.get("DB_PATH") or "data/catdash.db",
         port=_int("PORT", 8080),
     )

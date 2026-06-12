@@ -53,8 +53,8 @@ All via environment variables (see [`.env.example`](.env.example)):
 | `PORT`                               | `8080` | Dashboard port |
 | `TZ`                                 | `UTC` | Container timezone |
 | `ACTIVITY_LIMIT`                     | `1000` | Activity rows requested per robot per run |
-| `WEIGHT_LIMIT`                       | `500` | Per-pet weight measurements per run |
-| `INSIGHT_DAYS`                       | `30` | Days of daily clean-cycle history requested |
+| `WEIGHT_LIMIT`                       | `5000` | Per-pet weight measurements per run |
+| `INSIGHT_DAYS`                       | `365` | Days of daily clean-cycle history requested (auto-clamped to the robot's setup date) |
 | `DB_PATH`                            | `/data/catdash.db` | SQLite location |
 
 ## API
@@ -102,11 +102,32 @@ weigh-ins”* toggle — nothing is discarded.
 With a single cat, every weigh-in belongs to that cat. With multiple cats, Whisker's
 own per-pet attribution is used, so each cat gets its own series automatically.
 
+## History & backfill
+
+How far back Whisker still has data varies a lot by source, and the first
+collection grabs the maximum of each automatically:
+
+- **Feedings** — the full history (years; back to first setup) is pulled from the
+  feeder's backing store on the first run and mirrored idempotently thereafter.
+  (`pylitterbot` itself only exposes the last 24h, so the collector queries the
+  feeding history directly.)
+- **Activity** (clean cycles, raw weigh-ins, litter dispensed — the app's
+  "Download Data" stream) — fetched back to the robot's setup date. The trick is
+  passing an explicit `startTimestamp`; without one the API returns only a recent
+  slice, which is why the default looks like ~a week of retention.
+- **Daily clean cycles** — fetched back to the litter robot's setup date
+  (`INSIGHT_DAYS`, auto-clamped — the insights API returns broken data if asked
+  for a window predating setup).
+- **Curated per-pet weights** — Whisker only retains a short window server-side
+  for the curated SmartScale series, so it can't be backfilled beyond what it
+  still holds (the raw weigh-ins, however, come back in full via the activity
+  stream). Its value comes from catdash accumulating it over time.
+
 ## Notes
 
 - `pylitterbot` is an unofficial, reverse-engineered client; a Whisker API change
   could break collection. The version is pinned in `uv.lock`; parsers are tolerant
   (unknown/unparseable events are skipped, not fatal).
 - Keep credentials in `.env` only — it is gitignored and excluded from the image.
-- Because Whisker only retains ~30 days, avoid long outages: `restart:
-  unless-stopped` plus the 6h interval keeps a comfortable safety margin.
+- Because raw activity/weights roll off server-side within days, avoid long
+  outages: `restart: unless-stopped` plus the 6h interval keeps a safety margin.
