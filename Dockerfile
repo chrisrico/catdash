@@ -48,4 +48,7 @@ USER app
 VOLUME ["/data"]
 EXPOSE 8080
 
-CMD ["uv", "run", "--no-sync", "uvicorn", "catdash.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Exec the venv's uvicorn directly: uv is only a build-time tool here, and
+# `uv run` wants a home directory — which an arbitrary `user:` override
+# (compose PUID/PGID) doesn't have.
+CMD ["/app/.venv/bin/uvicorn", "catdash.main:app", "--host", "0.0.0.0", "--port", "8080"]

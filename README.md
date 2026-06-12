@@ -84,12 +84,24 @@ docker compose pull && docker compose up -d
 ```
 
 > **Upgrading from a version that ran as root:** the container now runs as a
-> non-root user (uid 1000), so a DB created by an older version is root-owned
-> and unwritable until you fix ownership once:
+> non-root user, so a DB created by an older version is root-owned and
+> unwritable until ownership is fixed once. The nicest fix: set `PUID`/`PGID`
+> in `.env` to the host user who owns your data folder (values from `id -u` /
+> `id -g`) and chown the folder to that user — ownership then matches what you
+> already manage:
+>
+> ```bash
+> sudo chown -R "$(id -u):$(id -g)" /volume1/docker/catdash   # your DATA_DIR
+> ```
+>
+> Or skip `PUID`/`PGID` and chown to the image's default user (uid 1000):
 >
 > ```bash
 > docker compose run --rm --user root dashboard chown -R app:app /data
 > ```
+>
+> If the app can't write its DB it now says so at startup, with the exact
+> `chown` to run.
 
 **Logs & health:**
 
@@ -124,6 +136,7 @@ All via environment variables (see [`.env.example`](.env.example)):
 | `WHISKER_EMAIL` / `WHISKER_PASSWORD` | — | Whisker account credentials (**required**) |
 | `COLLECT_INTERVAL_HOURS`             | `6` | How often to pull from Whisker |
 | `REFRESH_COOLDOWN_MINUTES`           | `10` | Minimum minutes between manual *Collect now* runs (`429` inside the window; `0` disables) |
+| `PUID` / `PGID`                      | `1000` | Host user/group to run the container as (compose only) — set to the owner of `DATA_DIR` (`id -u` / `id -g`) |
 | `PORT`                               | `8080` | Dashboard port |
 | `TZ`                                 | _(host)_ | Timezone for log timestamps; defaults to the host's (via the `/etc/localtime` mount) — set to override |
 | `ACTIVITY_LIMIT`                     | `50000` | Max activity rows requested per robot per run (the first backfill is large; later runs are incremental) |

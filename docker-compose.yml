@@ -1,16 +1,16 @@
 services:
   dashboard:
-    # Prebuilt image from GHCR — no source or local build needed. To build from
-    # source instead, run: docker build -t ghcr.io/chrisrico/catdash:latest .
     image: ghcr.io/chrisrico/catdash:latest
     container_name: catdash
     restart: unless-stopped
+    # Run as the host user who owns your data folder (values from `id -u` /
+    # `id -g`), so the DB is written with ownership you already manage.
+    # Unset, it falls back to the image's built-in non-root user (1000:1000).
+    user: "${PUID:-1000}:${PGID:-1000}"
     env_file: .env
     environment:
       DB_PATH: /data/catdash.db
       COLLECT_INTERVAL_HOURS: ${COLLECT_INTERVAL_HOURS:-6}
-      # TZ is intentionally not pinned here: unset lets the container read the
-      # host timezone via the /etc/localtime mount below. Set TZ in .env to force one.
     ports:
       - "${PORT:-8080}:8080"
     volumes:
