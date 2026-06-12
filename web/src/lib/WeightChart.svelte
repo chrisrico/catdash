@@ -6,20 +6,23 @@
     bucketUnit,
     bucketBy,
     median,
-    rejectPartialWeighins,
+    rejectWeightOutliers,
   } from "./api.js";
   import { palette, baseOption, timeAxis, valueAxis } from "./echarts.js";
   import { themeState } from "./theme.svelte.js";
 
-  let { weights, showRaw } = $props();
+  let { weights } = $props();
+
+  const RAW_NAME = "Raw weigh-ins";
 
   const DAY = 86400000;
 
   const option = $derived.by(() => {
     const c = palette(themeState.resolved);
-    // Drop partial weigh-ins (e.g. a lone 3.3 lbs) up front, so they taint
-    // neither the per-bucket median trend nor the raw scatter / y-axis scale.
-    const raw = rejectPartialWeighins(
+    // Drop implausible weigh-ins (lone lows like 3.3 lbs, highs like 15.7) up
+    // front, so they taint neither the per-bucket median trend nor the raw
+    // scatter / y-axis scale.
+    const raw = rejectWeightOutliers(
       weights.raw.map((r) => [new Date(r.timestamp).getTime(), r.weight_lbs])
     );
 
@@ -56,9 +59,11 @@
         lineStyle: { color: c.accent2, width: 2, type: [6, 4] },
       });
     }
-    if (showRaw && raw.length) {
+    // Raw weigh-ins are always a series so they can be toggled from the legend;
+    // they start hidden (see legend.selected below) to keep the default view clean.
+    if (raw.length) {
       series.push({
-        name: "Raw weigh-ins",
+        name: RAW_NAME,
         type: "scatter",
         data: raw,
         symbolSize: 4,
@@ -69,6 +74,7 @@
     const base = baseOption(c);
     return {
       ...base,
+      legend: { ...base.legend, selected: { [RAW_NAME]: false } },
       tooltip: { ...base.tooltip, valueFormatter: (v) => fmtLbs(v) },
       xAxis: timeAxis(c),
       yAxis: {

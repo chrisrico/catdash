@@ -1,5 +1,5 @@
 <script>
-  let { pets, petId = $bindable(), range = $bindable(), showRaw = $bindable() } = $props();
+  let { pets, petId = $bindable(), range = $bindable() } = $props();
 </script>
 
 <section class="controls">
@@ -23,9 +23,5 @@
       <option value="365">Last year</option>
       <option value="all">All time</option>
     </select>
-  </label>
-  <label class="ctl checkbox">
-    <input type="checkbox" bind:checked={showRaw} />
-    <span>Show raw weigh-ins</span>
   </label>
 </section>

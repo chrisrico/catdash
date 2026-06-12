@@ -15,7 +15,6 @@
   // option here with loadPersisted(...) and a savePersisted line to persist it.
   let petId = $state(loadPersisted("petId", ""));
   let range = $state(loadPersisted("range", "all"));
-  let showRaw = $state(loadPersisted("showRaw", false));
   let activityTypes = $state(
     loadPersisted("activityTypes", ACTIVITY_CATEGORIES.map((c) => c.key))
   );
@@ -24,7 +23,6 @@
   $effect(() => {
     savePersisted("petId", petId);
     savePersisted("range", range);
-    savePersisted("showRaw", showRaw);
     savePersisted("activityTypes", activityTypes);
   });
 
@@ -65,6 +63,7 @@
     try {
       sections[key] = { data: await fetchJSON(url), error: null };
     } catch (err) {
+      console.error(`[catdash] failed to load "${key}" from ${url}:`, err);
       sections[key] = { data: sections[key].data, error: err.message };
     }
   }
@@ -108,6 +107,7 @@
       pets = await fetchJSON("/api/pets");
       if (pets.length === 1) petId = pets[0].id;
     } catch (err) {
+      console.error("[catdash] failed to load pets:", err);
       status = `Error: ${err.message}`;
       statusError = true;
     } finally {
@@ -115,22 +115,64 @@
     }
   }
 
+  // /api/collect runs for several seconds — too long to hold an HTTP response
+  // across some browsers (Firefox aborts the long request → "NetworkError ...
+  // fetch resource"). So the POST only *starts* the collection and returns
+  // immediately; we then poll /api/collect/status until the background run
+  // finishes. The POST is short-lived, so a stale-keep-alive failure is retried
+  // a couple times on a fresh connection (collection is idempotent).
+  async function startCollect(retries = 2) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fetch("/api/collect", { method: "POST" });
+      } catch (err) {
+        console.warn(
+          `[catdash] collect POST network error (attempt ${attempt + 1}/${retries + 1}):`,
+          err
+        );
+        if (attempt >= retries) throw err;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+  }
+
+  // Poll until the background collection finishes; returns its result.
+  async function awaitCollection({ tries = 80, intervalMs = 1500 } = {}) {
+    for (let i = 0; i < tries; i++) {
+      await new Promise((r) => setTimeout(r, intervalMs));
+      let s;
+      try {
+        s = await fetchJSON("/api/collect/status");
+      } catch (err) {
+        console.warn("[catdash] collect status poll failed, retrying:", err);
+        continue; // transient; keep waiting
+      }
+      if (!s.running) {
+        return s.last_error ? { ok: false, error: s.last_error } : s.last_result;
+      }
+    }
+    throw new Error("collection timed out");
+  }
+
   async function collectNow() {
     collecting = true;
     status = "Collecting from Whisker…";
     statusError = false;
     try {
-      const res = await fetch("/api/collect", { method: "POST" });
-      const body = await res.json();
-      if (body.ok) {
-        status = `Collected: ${body.weights_new} weights, ${body.activities_new} events, ${body.feedings_new} feedings`;
+      const res = await startCollect();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await awaitCollection();
+      if (result && result.ok) {
+        status = `Collected: ${result.weights_new} weights, ${result.activities_new} events, ${result.feedings_new} feedings`;
         await loadPets();
         await refresh();
       } else {
-        status = `Collection failed: ${body.error || "unknown"}`;
+        console.error("[catdash] collection finished with an error:", result);
+        status = `Collection failed: ${(result && result.error) || "unknown"}`;
         statusError = true;
       }
     } catch (err) {
+      console.error("[catdash] collection request failed:", err);
       status = `Collection failed: ${err.message}`;
       statusError = true;
     } finally {
@@ -169,7 +211,7 @@
   </div>
 </header>
 
-<Controls {pets} bind:petId bind:range bind:showRaw />
+<Controls {pets} bind:petId bind:range />
 
 {#if sections.stats.data}
   <Cards stats={sections.stats.data} />
@@ -183,7 +225,7 @@
     <span class="hint">Weigh-in trend (median per bucket) · 7-day average · raw weigh-ins</span>
   </div>
   {#if sections.weights.data}
-    <WeightChart weights={sections.weights.data} {showRaw} />
+    <WeightChart weights={sections.weights.data} />
   {:else if sections.weights.error}
     <div class="panel-error">Weights failed to load: {sections.weights.error}</div>
   {/if}

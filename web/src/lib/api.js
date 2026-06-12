@@ -77,18 +77,24 @@ export const median = (vs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-// Partial weigh-ins — the cat stepping only partway onto the LR4 scale — record
-// a fraction of its real body weight (e.g. a lone 3.3 lbs for an ~11 lb cat).
-// They are sensor artifacts, not real readings, and a per-day median can't drop
-// one because it's often the only weigh-in that day. So reject anything well
-// outside a band around the robust (median) center BEFORE bucketing. The band is
-// generous (−40% / +60%) so genuine weight changes survive; only gross partials
-// fall outside it. `points` are [ms, lbs]; returns the same shape, filtered.
-export function rejectPartialWeighins(points) {
-  if (points.length < 4) return points; // too few to establish a robust center
-  const center = median(points.map((p) => p[1]));
-  if (!center) return points;
-  return points.filter(([, v]) => v >= center * 0.6 && v <= center * 1.6);
+// Reject biologically-implausible weigh-ins before charting. A cat's weight
+// drifts slowly, so a real reading is always close to its time-neighbors;
+// sensor artifacts are not — partial weigh-ins (only partway onto the scale)
+// read far LOW, double/glitch weigh-ins read far HIGH. For each point we take
+// the median of a window of nearby readings and drop it if it deviates more
+// than `tol` from that LOCAL median. Using a rolling (not global) median tracks
+// genuine long-term drift while still catching spikes in either direction; the
+// window is large enough that a cluster of bad readings can't move the median.
+// `points` are [ms, lbs] in time order; returns the same shape, filtered.
+export function rejectWeightOutliers(points, { window = 15, tol = 0.15 } = {}) {
+  if (points.length < 5) return points; // too few for a stable local center
+  const vals = points.map((p) => p[1]);
+  const n = vals.length;
+  const half = window >> 1;
+  return points.filter((_, i) => {
+    const local = median(vals.slice(Math.max(0, i - half), Math.min(n, i + half + 1)));
+    return !local || Math.abs(vals[i] - local) / local <= tol;
+  });
 }
 
 // Time-based 7-day trailing moving average over curated readings.
