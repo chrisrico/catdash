@@ -198,6 +198,28 @@ def upsert_feedings(feedings: Iterable[dict[str, Any]]) -> int:
         )
 
 
+def latest_activity_timestamp() -> str | None:
+    """Newest stored activity timestamp (ISO-8601 UTC), or None if empty.
+    Drives incremental collection: later runs only fetch events after this."""
+    with connect() as conn:
+        row = conn.execute("SELECT MAX(timestamp) AS ts FROM activities").fetchone()
+    return row["ts"] if row and row["ts"] else None
+
+
+def latest_feeding_timestamp() -> str | None:
+    """Newest stored feeding timestamp (ISO-8601 UTC), or None if empty."""
+    with connect() as conn:
+        row = conn.execute("SELECT MAX(timestamp) AS ts FROM feedings").fetchone()
+    return row["ts"] if row and row["ts"] else None
+
+
+def latest_usage_date() -> str | None:
+    """Newest stored daily-usage date (YYYY-MM-DD), or None if empty."""
+    with connect() as conn:
+        row = conn.execute("SELECT MAX(date) AS d FROM daily_usage").fetchone()
+    return row["d"] if row and row["d"] else None
+
+
 def record_food_level(level: int | None) -> bool:
     """Snapshot the hopper level, but only when it changed (clean step series)."""
     if level is None:
