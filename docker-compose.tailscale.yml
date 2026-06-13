@@ -1,0 +1,69 @@
+# Self-contained Catdash compose WITH Tailscale access.
+#
+# Use this *instead of* docker-compose.yml (e.g. as your Synology Container
+# Manager project file) when you want the dashboard reachable over your tailnet
+# at https://catdash.<your-tailnet>.ts.net, with a valid HTTPS cert and
+# tailnet-only access. Catdash has no built-in login, so the tailnet itself is
+# the access control.
+#
+# Prerequisites:
+#   1. TS_AUTHKEY in .env  (a reusable key; see .env.example)
+#   2. Tailscale admin console: MagicDNS on, and HTTPS Certificates enabled
+#      (DNS tab) — serve silently no-ops without it.
+#   3. .env and tailscale/serve.json present next to this file (Container
+#      Manager: in the project folder).
+#
+# First start registers the node; the auth key can be revoked afterward
+# (TS_AUTH_ONCE=true means it's only consulted when not already logged in).
+
+services:
+  tailscale-catdash:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-catdash
+    hostname: catdash # becomes catdash.<your-tailnet>.ts.net
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_AUTH_ONCE=true # only use the key when not already registered
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true # no /dev/net/tun or NET_ADMIN needed
+      - TS_SERVE_CONFIG=/config/serve.json # HTTPS :443 -> dashboard :8080
+    volumes:
+      - ${TS_STATE_DIR:-catdash_ts_state}:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
+    # The dashboard shares this container's namespace, so its port is published
+    # here. Delete this block to make Catdash reachable ONLY over the tailnet.
+    ports:
+      - "${PORT:-8080}:8080"
+    restart: unless-stopped
+
+  dashboard:
+    image: ghcr.io/chrisrico/catdash:latest
+    container_name: catdash
+    restart: unless-stopped
+    # Run as the host user who owns your data folder (values from `id -u` /
+    # `id -g`). Unset, it falls back to the image's non-root user (1000:1000).
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file: .env
+    environment:
+      DB_PATH: /data/catdash.db
+      COLLECT_INTERVAL_HOURS: ${COLLECT_INTERVAL_HOURS:-6}
+    # Join the sidecar's network namespace — the sidecar owns the ports, so
+    # this service publishes none of its own.
+    network_mode: service:tailscale-catdash
+    depends_on:
+      - tailscale-catdash
+    volumes:
+      - ${DATA_DIR:-catdash_data}:/data
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz').status==200 else 1)"]
+      interval: 1m
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  catdash_data:
+  # Tailscale node state (identity/keys). Named volume by default; set
+  # TS_STATE_DIR=/path/on/host in .env to bind-mount it instead.
+  catdash_ts_state:
