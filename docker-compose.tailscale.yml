@@ -22,14 +22,18 @@ services:
     container_name: tailscale-catdash
     hostname: catdash # becomes catdash.<your-tailnet>.ts.net
     environment:
-      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_AUTHKEY=${TS_AUTHKEY:-} # the one TS_* value you supply (via .env)
       - TS_AUTH_ONCE=true # only use the key when not already registered
-      - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=true # no /dev/net/tun or NET_ADMIN needed
-      - TS_SERVE_CONFIG=/config/serve.json # HTTPS :443 -> dashboard :8080
+      # In-container paths the tailscale daemon reads — fixed, do not override.
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json # serve HTTPS :443 -> dashboard :8080
     volumes:
-      - ${TS_STATE_DIR:-catdash_ts_state}:/var/lib/tailscale
-      - ./tailscale/serve.json:/config/serve.json:ro
+      # Host paths bound into the container. Override either in .env to relocate
+      # it; TAILSCALE_* names are deliberately distinct from the TS_* daemon vars
+      # above so the host side and the in-container side can't be confused.
+      - ${TAILSCALE_STATE_DIR:-catdash_ts_state}:/var/lib/tailscale
+      - ${TAILSCALE_SERVE_CONFIG:-./tailscale/serve.json}:/config/serve.json:ro
     # The dashboard shares this container's namespace, so its port is published
     # here. Delete this block to make Catdash reachable ONLY over the tailnet.
     ports:
@@ -65,5 +69,5 @@ services:
 volumes:
   catdash_data:
   # Tailscale node state (identity/keys). Named volume by default; set
-  # TS_STATE_DIR=/path/on/host in .env to bind-mount it instead.
+  # TAILSCALE_STATE_DIR=/path/on/host in .env to bind-mount it instead.
   catdash_ts_state:
