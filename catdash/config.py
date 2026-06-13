@@ -23,6 +23,13 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     username: str
@@ -34,6 +41,7 @@ class Settings:
     insight_days: int
     db_path: str
     port: int
+    controls_enabled: bool
 
     @property
     def has_credentials(self) -> bool:
@@ -52,4 +60,5 @@ def get_settings() -> Settings:
         insight_days=_int("INSIGHT_DAYS", 365),
         db_path=os.environ.get("DB_PATH") or "data/catdash.db",
         port=_int("PORT", 8080),
+        controls_enabled=_bool("CONTROLS_ENABLED", False),
     )

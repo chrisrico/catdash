@@ -114,7 +114,9 @@ curl localhost:8080/healthz     # -> {"status":"ok"}
 **Exposure.** The dashboard is plain HTTP on port `8080` with **no authentication** —
 anyone who can reach it sees your data and the *Collect now* button (manual
 collections are rate-limited by `REFRESH_COOLDOWN_MINUTES` so strangers can't hammer
-Whisker with your credentials). The recommended way to reach it from outside your
+Whisker with your credentials). This matters even more if you turn on
+[Remote control](#remote-control) (`CONTROLS_ENABLED`), which lets anyone who can
+reach the page actually command your robots. The recommended way to reach it from outside your
 LAN is [Tailscale](https://tailscale.com) (or any VPN): install it on the host and
 on your devices, open `http://<host>:8080` over the tailnet, and nothing is exposed
 to the public internet. If you genuinely want it public, front it with a reverse
@@ -136,6 +138,7 @@ All via environment variables (see [`.env.example`](.env.example)):
 | `WHISKER_EMAIL` / `WHISKER_PASSWORD` | — | Whisker account credentials (**required**) |
 | `COLLECT_INTERVAL_HOURS`             | `6` | How often to pull from Whisker |
 | `REFRESH_COOLDOWN_MINUTES`           | `10` | Minimum minutes between manual *Collect now* runs (`429` inside the window; `0` disables) |
+| `CONTROLS_ENABLED`                   | `false` | Add the **Robots** panel: live status + **remote control** (start cycle, night light, wait time, panel lock, power, feeder snack, …). No dashboard auth, so only enable on a trusted network — see [Remote control](#remote-control). Off → the control endpoints `404` and catdash stays read-only |
 | `PUID` / `PGID`                      | `1000` | Host user/group to run the container as (compose only) — set to the owner of `DATA_DIR` (`id -u` / `id -g`) |
 | `PORT`                               | `8080` | Dashboard port |
 | `TZ`                                 | _(host)_ | Timezone for log timestamps; defaults to the host's (via the `/etc/localtime` mount) — set to override |
@@ -162,6 +165,41 @@ The dashboard is built on a small JSON API you can also use directly:
   run. Named `refresh`, not `collect`, so ad blockers don't cancel it as an
   analytics beacon.
 - `GET /healthz` — health check
+- `GET /api/config` — feature flags the dashboard reads at load (`{controls_enabled}`)
+
+**Control** (only when `CONTROLS_ENABLED=true`; otherwise these `404`) — see
+[Remote control](#remote-control):
+
+- `GET /api/robots` — live snapshot of every Litter-Robot + Feeder (status,
+  litter/drawer levels, wait time, night light, power, food level, …)
+- `POST /api/robots/{id}/clean` — start a clean cycle
+- `POST /api/robots/{id}/power` · `/wait-time` · `/night-light` · `/panel-lock` ·
+  `/panel-brightness` · `/name` · `/reset` · `/hopper` · `/firmware-update`
+- `POST /api/feeders/{id}/snack` · `/gravity-mode` · `/meal-insert-size` ·
+  `/night-light` · `/panel-lock` · `/name`
+
+Each command returns the robot's post-command snapshot (`{ok, robot}`).
+
+## Remote control
+
+By default catdash is **read-only** — it collects and visualizes history and
+never sends a command to a robot. Set **`CONTROLS_ENABLED=true`** to unlock a
+**Robots** panel that mirrors the core of the Whisker app: each unit's live
+status and gauges plus controls to start a clean cycle, change the wait time,
+toggle the night light / panel lock / power, enable the LitterHopper, and — for
+the Feeder — give a snack, switch gravity mode, or set the portion size. It talks
+to Whisker through the same [`pylitterbot`](https://github.com/natekspencer/pylitterbot)
+client the collector uses, over one reused, lazily-connected session.
+
+> **This is a real switch, not a view.** The dashboard has **no authentication**,
+> so with controls on, anyone who can reach the page can power off your robot or
+> start a cycle. Only enable it on a trusted network — the same
+> [Tailscale/LAN](#deploying-in-production) isolation the read-only dashboard
+> already relies on. With the flag off, the control endpoints don't exist at all.
+
+Not yet implemented (the Whisker app has them; `pylitterbot` doesn't expose
+them, so they're deferred): editing the **sleep schedule**, **resetting the
+waste-drawer gauge**, and **push notifications**.
 
 ## Local development
 

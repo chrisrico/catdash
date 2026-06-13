@@ -3,6 +3,7 @@
   import { loadPersisted, savePersisted } from "./lib/persist.js";
   import { themeState } from "./lib/theme.svelte.js";
   import Controls from "./lib/Controls.svelte";
+  import Robots from "./lib/Robots.svelte";
   import Cards from "./lib/Cards.svelte";
   import WeightChart from "./lib/WeightChart.svelte";
   import UsageChart from "./lib/UsageChart.svelte";
@@ -220,6 +221,8 @@
     <button class="btn" onclick={collectNow} disabled={collecting}>Collect now</button>
   </div>
 </header>
+
+<Robots />
 
 <Controls {pets} bind:petId bind:range />
 
