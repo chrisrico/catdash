@@ -139,6 +139,23 @@ h1 { font-size: 1.4rem; margin: 0; letter-spacing: -0.01em; }
 .delta.up { color: var(--accent-2); }
 .delta.down { color: var(--accent); }
 .delta.flat { color: var(--muted); }
+.sparkline { width: 100%; height: 28px; margin-top: 8px; display: block; }
+.sparkline path { stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+
+/* Bathroom habits: summary line + time-of-day strip. */
+.habits-summary { font-size: 0.95rem; margin: 0 0 6px; }
+.habits-summary b { font-weight: 700; }
+.habits-sub { color: var(--muted); font-size: 0.85rem; }
+.hour-strip { display: flex; align-items: flex-end; gap: 2px; height: 52px; margin-top: 10px; }
+.hour-col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.hour-bar {
+  width: 100%;
+  background: var(--accent-soft);
+  border-top: 2px solid var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+}
+.hour-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.7rem; margin-top: 4px; }
 
 .panel {
   background: var(--panel);

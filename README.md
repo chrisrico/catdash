@@ -159,6 +159,7 @@ The dashboard is built on a small JSON API you can also use directly:
 - `GET /api/feedings?start=&end=&limit=` — feeder meal/snack events
 - `GET /api/food?start=&end=` — `{daily, levels}` cups dispensed + hopper level
 - `GET /api/stats?pet_id=` — summary stats (weight + usage + feeder)
+- `GET /api/habits?start=&end=` — bathroom-habit aggregates (approx time-in-box per visit)
 - `POST /api/refresh` — start a collection now (returns `202` immediately; runs in
   the background — poll `GET /api/refresh/status` for progress/result). Returns
   `429` with `retry_after_seconds` within `REFRESH_COOLDOWN_MINUTES` of the last

@@ -5,9 +5,8 @@
   import Controls from "./lib/Controls.svelte";
   import Robots from "./lib/Robots.svelte";
   import Cards from "./lib/Cards.svelte";
-  import WeightChart from "./lib/WeightChart.svelte";
-  import UsageChart from "./lib/UsageChart.svelte";
-  import FeederChart from "./lib/FeederChart.svelte";
+  import WeightFoodChart from "./lib/WeightFoodChart.svelte";
+  import HabitsChart from "./lib/HabitsChart.svelte";
   import ActivityFilter from "./lib/ActivityFilter.svelte";
   import ActivityTable from "./lib/ActivityTable.svelte";
 
@@ -73,10 +72,10 @@
   // panel error instead of blanking the whole dashboard.
   let sections = $state({
     weights: { data: null, error: null },
-    usage: { data: null, error: null },
     food: { data: null, error: null },
     activities: { data: null, error: null },
     stats: { data: null, error: null },
+    habits: { data: null, error: null },
   });
 
   const subtitle = $derived(
@@ -111,9 +110,9 @@
     statusError = false;
     await Promise.all([
       loadSection("weights", `/api/weights?${qs}${petQs}`),
-      loadSection("usage", `/api/usage?${qs}`),
       loadSection("food", `/api/food?${qs}`),
       loadSection("stats", `/api/stats?${petId ? `pet_id=${encodeURIComponent(petId)}` : ""}`),
+      loadSection("habits", `/api/habits?${qs}`),
       loadActivities(),
     ]);
     const failed = Object.values(sections).filter((s) => s.error).length;
@@ -282,44 +281,38 @@
     <Controls {pets} bind:petId bind:range />
 
     {#if sections.stats.data}
-      <Cards stats={sections.stats.data} />
+      <Cards
+        stats={sections.stats.data}
+        weights={sections.weights.data}
+        foodLevels={sections.food.data?.levels}
+      />
     {:else if sections.stats.error}
       <div class="panel-error">Stats failed to load: {sections.stats.error}</div>
     {/if}
 
     <section class="panel">
       <div class="panel-head">
-        <h2>Weight</h2>
-        <span class="hint">Weigh-in trend (median per bucket) · 7-day average · raw weigh-ins</span>
+        <h2>Weight &amp; food</h2>
+        <span class="hint">Weight trend (median + 7-day avg) · food dispensed per bucket</span>
+      </div>
+      {#if sections.weights.data && sections.food.data}
+        <WeightFoodChart weights={sections.weights.data} food={sections.food.data} />
+      {:else if sections.weights.error || sections.food.error}
+        <div class="panel-error">
+          Chart failed to load: {sections.weights.error || sections.food.error}
+        </div>
+      {/if}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Bathroom habits</h2>
+        <span class="hint">How often &amp; what time of day {pets.length === 1 ? pets[0].name : "your cats"} use the box</span>
       </div>
       {#if sections.weights.data}
-        <WeightChart weights={sections.weights.data} />
+        <HabitsChart weights={sections.weights.data} duration={sections.habits.data?.duration} />
       {:else if sections.weights.error}
-        <div class="panel-error">Weights failed to load: {sections.weights.error}</div>
-      {/if}
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Usage</h2>
-        <span class="hint">Clean cycles &amp; weigh-ins per day</span>
-      </div>
-      {#if sections.usage.data}
-        <UsageChart usage={sections.usage.data} />
-      {:else if sections.usage.error}
-        <div class="panel-error">Usage failed to load: {sections.usage.error}</div>
-      {/if}
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Feeder</h2>
-        <span class="hint">Food dispensed (bucketed by range) &amp; hopper level over time</span>
-      </div>
-      {#if sections.food.data}
-        <FeederChart food={sections.food.data} />
-      {:else if sections.food.error}
-        <div class="panel-error">Feeder data failed to load: {sections.food.error}</div>
+        <div class="panel-error">Habits failed to load: {sections.weights.error}</div>
       {/if}
     </section>
   {:else if activeTab === "activity"}

@@ -1,6 +1,6 @@
 """SQLite storage layer.
 
-Four tables:
+Tables:
   - pets             : pet profiles (id, name) from the Whisker account.
   - weight_readings  : curated, SmartScale-attributed per-pet weights
                        (from pet.fetch_weight_history). This is the clean,
@@ -11,6 +11,8 @@ Four tables:
   - daily_usage      : authoritative daily clean-cycle counts (from get_insight).
   - feedings         : Feeder-Robot meal/snack events (timestamp, cups, name).
   - food_level       : Feeder-Robot hopper level snapshots over time.
+  - wait_time        : Litter-Robot clean-cycle wait-time snapshots (on change),
+                       so each visit's duration can be derived going forward.
 
 Timestamps are stored as ISO-8601 UTC strings, which sort and range-compare
 lexicographically. All writes are idempotent (INSERT OR IGNORE / upsert) so
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -76,6 +79,12 @@ CREATE INDEX IF NOT EXISTS idx_feedings_ts ON feedings(timestamp);
 CREATE TABLE IF NOT EXISTS food_level (
     timestamp   TEXT PRIMARY KEY,        -- collection time of the reading
     level       INTEGER,                 -- 0-100 percent (hopper fullness)
+    inserted_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wait_time (
+    timestamp   TEXT PRIMARY KEY,        -- collection time of the reading
+    minutes     INTEGER,                 -- clean-cycle wait time setting
     inserted_at TEXT NOT NULL
 );
 """
@@ -295,6 +304,28 @@ def record_food_level(level: int | None) -> bool:
     return True
 
 
+def record_wait_time(minutes: int | None) -> bool:
+    """Snapshot the clean-cycle wait time, only when it changes. We can't know
+    what it was historically (the API only reports the current value), so this
+    captures changes going forward — letting us turn each cat detection + clean
+    cycle into an approximate time-in-box (the cycle fires this many minutes
+    after the cat leaves)."""
+    if minutes is None:
+        return False
+    now = _now()
+    with connect() as conn:
+        last = conn.execute(
+            "SELECT minutes FROM wait_time ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        if last is not None and last["minutes"] == minutes:
+            return False
+        conn.execute(
+            "INSERT OR IGNORE INTO wait_time (timestamp, minutes, inserted_at) VALUES (?, ?, ?)",
+            (now, int(minutes), now),
+        )
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # Reads
 # --------------------------------------------------------------------------- #
@@ -478,6 +509,88 @@ def get_food_levels(
             params,
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+_VALID_WAIT_TIMES = (3, 7, 15, 25, 30)
+
+
+def _parse_ts(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def get_visit_durations(
+    start: str | None = None, end: str | None = None
+) -> dict[str, Any]:
+    """Approximate time-in-box per bathroom visit.
+
+    A visit is `Cat Detected -> ... -> Clean Cycle In Progress`; the cycle fires
+    `wait_time` minutes AFTER the cat leaves, so duration = (cycle start - cat
+    detected) - wait_time. Wait time comes from the recorded snapshots; for
+    visits predating any snapshot it's inferred as the largest valid setting that
+    fits under the shortest observed gap (a gap can't be shorter than the wait).
+    Returns count + median/mean seconds (median is robust to odd long pairings).
+    """
+    where, params = _range("timestamp", start, end)
+    cond = "(action = 'Cat Detected' OR action = 'Clean Cycle In Progress')"
+    ev_where = f"{where} AND {cond}" if where else f" WHERE {cond}"
+    with connect() as conn:
+        events = conn.execute(
+            f"SELECT timestamp, action FROM activities{ev_where} ORDER BY timestamp",
+            params,
+        ).fetchall()
+        waits = conn.execute(
+            "SELECT timestamp, minutes FROM wait_time ORDER BY timestamp"
+        ).fetchall()
+
+    snaps = [(_parse_ts(w["timestamp"]), w["minutes"]) for w in waits]
+
+    # Pair each clean cycle with the most recent preceding detection (within 30
+    # min, so manual cycles with no recent cat are excluded).
+    pairs: list[tuple[datetime, float]] = []
+    last_detect: datetime | None = None
+    for event in events:
+        when = _parse_ts(event["timestamp"])
+        if event["action"] == "Cat Detected":
+            last_detect = when
+        else:  # Clean Cycle In Progress
+            if last_detect is not None:
+                gap = (when - last_detect).total_seconds()
+                if 0 < gap <= 1800:
+                    pairs.append((when, gap))
+            last_detect = None
+
+    if not pairs:
+        return {"count": 0, "median_sec": None, "mean_sec": None}
+
+    # Infer the wait time for visits older than any recorded snapshot. Each gap is
+    # wait + duration, so the wait is the largest valid setting that fits under it;
+    # take the mode of that across the pre-snapshot visits (robust to the odd
+    # bad pairing, and assumes the setting was constant before we started
+    # recording — true here: it was 7 until the day recording began).
+    def _snapped_wait(gap: float) -> int:
+        fits = [m for m in _VALID_WAIT_TIMES if m * 60 <= gap]
+        return fits[-1] if fits else _VALID_WAIT_TIMES[0]
+
+    earliest_snap = snaps[0][0] if snaps else None
+    pre = [gap for when, gap in pairs if earliest_snap is None or when < earliest_snap]
+    inferred = (
+        Counter(_snapped_wait(g) for g in pre).most_common(1)[0][0]
+        if pre
+        else _VALID_WAIT_TIMES[0]
+    )
+
+    def wait_at(when: datetime) -> int:
+        active = [m for ts, m in snaps if ts <= when]
+        return active[-1] if active else inferred
+
+    durations = sorted(max(0.0, gap - wait_at(when) * 60) for when, gap in pairs)
+    n = len(durations)
+    median = durations[n // 2] if n % 2 else (durations[n // 2 - 1] + durations[n // 2]) / 2
+    return {
+        "count": n,
+        "median_sec": round(median),
+        "mean_sec": round(sum(durations) / n),
+    }
 
 
 def get_stats(pet_id: str | None = None) -> dict[str, Any]:

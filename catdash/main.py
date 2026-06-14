@@ -210,6 +210,16 @@ def api_stats(pet_id: str | None = Query(None)) -> dict:
     return db.get_stats(pet_id=pet_id)
 
 
+@app.get("/api/habits")
+def api_habits(
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+) -> dict:
+    """Bathroom-habit aggregates that aren't trivially derived client-side —
+    currently the approximate time-in-box per visit."""
+    return {"duration": db.get_visit_durations(start=start, end=end)}
+
+
 # Named /api/refresh, NOT /api/collect: ad blockers (uBlock/EasyPrivacy, Firefox
 # tracking protection) cancel requests to a "/collect" path because it matches
 # analytics-beacon filters (Google Analytics posts to /collect). That silently

@@ -306,6 +306,10 @@ async def collect() -> dict:
         for robot in account.robots:
             if hasattr(robot, "get_activity_history"):  # Litter-Robot
                 litter_robots += 1
+                # Snapshot the current wait time (stored only on change) so we can
+                # later derive each visit's duration — the API never reports what
+                # the wait time was historically, so we have to start recording it.
+                db.record_wait_time(getattr(robot, "clean_cycle_wait_time_minutes", None))
                 try:
                     activity_rows.extend(
                         await _fetch_activities(
