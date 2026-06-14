@@ -1,7 +1,7 @@
 // Modular ECharts build: register only what the three dashboard charts use,
 // keeping the self-hosted bundle small.
 import * as echarts from "echarts/core";
-import { LineChart, BarChart, ScatterChart } from "echarts/charts";
+import { LineChart, BarChart, ScatterChart, CustomChart } from "echarts/charts";
 import {
   GridComponent,
   TooltipComponent,
@@ -13,6 +13,7 @@ echarts.use([
   LineChart,
   BarChart,
   ScatterChart,
+  CustomChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,

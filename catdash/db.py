@@ -583,13 +583,25 @@ def get_visit_durations(
         active = [m for ts, m in snaps if ts <= when]
         return active[-1] if active else inferred
 
-    durations = sorted(max(0.0, gap - wait_at(when) * 60) for when, gap in pairs)
+    # Drop zero-length results (gap <= wait time): pairing artifacts / near-instant
+    # detections, not real time-in-box.
+    samples = [
+        (when, dur)
+        for when, gap in pairs
+        if round(dur := max(0.0, gap - wait_at(when) * 60)) > 0
+    ]
+    if not samples:
+        return {"count": 0, "median_sec": None, "mean_sec": None, "samples": []}
+    durations = sorted(d for _, d in samples)
     n = len(durations)
     median = durations[n // 2] if n % 2 else (durations[n // 2 - 1] + durations[n // 2]) / 2
     return {
         "count": n,
         "median_sec": round(median),
         "mean_sec": round(sum(durations) / n),
+        # Per-visit (cycle timestamp, seconds) so the dashboard can bucket the
+        # durations into a range band alongside the visit-count bars.
+        "samples": [[when.isoformat(), round(dur)] for when, dur in samples],
     }
 
 
