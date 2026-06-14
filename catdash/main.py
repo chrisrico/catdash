@@ -188,9 +188,12 @@ def api_food(
     start: str | None = Query(None),
     end: str | None = Query(None),
 ) -> dict:
-    """Feeder data: daily cups dispensed + hopper food-level snapshots."""
+    """Feeder data: daily cups dispensed, individual meals/snacks, and hopper
+    food-level snapshots. `feedings` powers the per-meal breakdown when drilling
+    into a chart bucket (limit high enough to cover any in-range bucket)."""
     return {
         "daily": db.get_daily_food(start=start, end=end),
+        "feedings": db.get_feedings(start=start, end=end, limit=10000),
         "levels": db.get_food_levels(start=start, end=end),
     }
 

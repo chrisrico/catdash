@@ -63,6 +63,10 @@ export const baseOption = (c) => ({
     backgroundColor: c.tooltipBg,
     borderColor: c.tooltipBorder,
     textStyle: { color: c.text },
+    // Snap the crosshair to the nearest bucket so the vertical line reads as
+    // "this time period"; the period name is carried in each chart's tooltip
+    // header (fmtBucket), so the axis-edge label is redundant — hide it.
+    axisPointer: { type: "line", snap: true, label: { show: false } },
   },
   grid: { left: 56, right: 56, top: 48, bottom: 32 },
 });

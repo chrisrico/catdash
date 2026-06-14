@@ -2,13 +2,21 @@
   // Weight trend and food dispensed on one chart: weight (median per bucket +
   // 7-day average) on the left axis in lbs, food dispensed as bars on the right
   // axis in cups — so you can read weight against intake. Raw weigh-ins are a
-  // legend-toggleable scatter (hidden by default).
+  // legend-toggleable scatter (hidden by default). Hovering a bucket shows the
+  // period's values; clicking one opens a modal listing every weigh-in and food
+  // entry that falls in it.
   import Chart from "./Chart.svelte";
+  import Modal from "./Modal.svelte";
   import {
     movingAverage,
     dayToLocalTime,
     bucketUnit,
     bucketBy,
+    bucketStartMs,
+    fmtBucket,
+    fmtLbs,
+    fmtCups,
+    fmtDateTime,
     sum,
     median,
     rejectWeightOutliers,
@@ -21,30 +29,56 @@
   const RAW_NAME = "Raw weigh-ins";
   const DAY = 86400000;
 
+  // Outlier-rejected weigh-ins as [ms, lbs] — the basis for the trend line and
+  // the x-window. The feeder's history (years) usually predates the litter
+  // robot's, so weight covers a shorter window; we anchor the combined view to
+  // the weight-tracked period (else the weight line collapses into a sliver) and
+  // bucket both series by that span. With no weight data, show food alone.
+  const raw = $derived(
+    rejectWeightOutliers(
+      (weights?.raw ?? []).map((r) => [new Date(r.timestamp).getTime(), r.weight_lbs])
+    )
+  );
+  const allFood = $derived((food?.daily ?? []).map((d) => [dayToLocalTime(d.date), d.cups]));
+
+  const xMin = $derived(raw.length ? raw[0][0] : undefined);
+  const unit = $derived.by(() => {
+    if (raw.length) {
+      const xMax = raw[raw.length - 1][0];
+      return bucketUnit(Math.max(0, (xMax - xMin) / DAY));
+    }
+    const t = allFood.map((p) => p[0]);
+    return bucketUnit(t.length > 1 ? (Math.max(...t) - Math.min(...t)) / DAY : 0);
+  });
+  const foodPts = $derived(xMin != null ? allFood.filter((p) => p[0] >= xMin) : allFood);
+
+  // --- Click-to-detail: the bucket the user clicked, and its rows ---
+  let clickedMs = $state(null);
+  const bucketMs = $derived(clickedMs == null ? null : bucketStartMs(clickedMs, unit));
+
+  const detail = $derived.by(() => {
+    if (bucketMs == null) return null;
+    const inBucket = (ms) => bucketStartMs(ms, unit) === bucketMs;
+    // All raw weigh-ins (not outlier-filtered) — this is the full drill-down.
+    const weighIns = (weights?.raw ?? [])
+      .map((r) => [new Date(r.timestamp).getTime(), r.weight_lbs])
+      .filter(([ms]) => inBucket(ms))
+      .sort((a, b) => a[0] - b[0]);
+    // Individual meals/snacks (not the daily total), same window as the bars.
+    const meals = (food?.feedings ?? [])
+      .map((f) => ({
+        ms: new Date(f.timestamp).getTime(),
+        name: f.name,
+        type: f.type,
+        cups: f.amount_cups,
+      }))
+      .filter((m) => inBucket(m.ms) && (xMin == null || m.ms >= xMin))
+      .sort((a, b) => a.ms - b.ms);
+    return { weighIns, meals };
+  });
+
   const option = $derived.by(() => {
     const c = palette(themeState.resolved);
-    // Drop implausible weigh-ins before they taint the median trend / y-scale.
-    const raw = rejectWeightOutliers(
-      (weights?.raw ?? []).map((r) => [new Date(r.timestamp).getTime(), r.weight_lbs])
-    );
-    const allFood = (food?.daily ?? []).map((d) => [dayToLocalTime(d.date), d.cups]);
-
-    // The feeder's history (years) usually predates the litter robot's, so weight
-    // covers a shorter window. Anchor the combined view to the weight-tracked
-    // period — otherwise the weight line collapses into a sliver at the right —
-    // and bucket both series by that span. With no weight data, show food alone.
-    let foodPts, unit, xMin;
-    if (raw.length) {
-      xMin = raw[0][0];
-      const xMax = raw[raw.length - 1][0];
-      foodPts = allFood.filter((p) => p[0] >= xMin);
-      unit = bucketUnit(Math.max(0, (xMax - xMin) / DAY));
-    } else {
-      foodPts = allFood;
-      xMin = undefined;
-      const t = allFood.map((p) => p[0]);
-      unit = bucketUnit(t.length > 1 ? (Math.max(...t) - Math.min(...t)) / DAY : 0);
-    }
 
     const trend = bucketBy(raw, unit, median);
     const foodBars = bucketBy(foodPts, unit, sum);
@@ -101,6 +135,20 @@
     return {
       ...base,
       legend: { ...base.legend, selected: { [RAW_NAME]: false } },
+      tooltip: {
+        ...base.tooltip,
+        formatter: (ps) => {
+          const arr = Array.isArray(ps) ? ps : [ps];
+          if (!arr.length) return "";
+          const head = fmtBucket(bucketStartMs(arr[0].axisValue, unit), unit);
+          const lines = arr.map((p) => {
+            const v = Array.isArray(p.value) ? p.value[1] : p.value;
+            const txt = p.seriesType === "bar" ? fmtCups(v) : fmtLbs(v);
+            return `${p.marker} ${p.seriesName}: <b>${txt}</b>`;
+          });
+          return head + "<br/>" + lines.join("<br/>");
+        },
+      },
       xAxis: { ...timeAxis(c), min: xMin },
       yAxis: [
         {
@@ -122,4 +170,46 @@
   });
 </script>
 
-<Chart {option} />
+<Chart {option} onBucketClick={(ms) => (clickedMs = ms)} />
+
+{#if detail}
+  <Modal title={fmtBucket(bucketMs, unit)} onClose={() => (clickedMs = null)}>
+    {#if !detail.weighIns.length && !detail.meals.length}
+      <div class="empty">No weigh-ins or feedings in this period.</div>
+    {:else}
+      {#if detail.weighIns.length}
+        <p class="modal-sub">Weigh-ins ({detail.weighIns.length})</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>When</th><th class="num">Weight</th></tr></thead>
+            <tbody>
+              {#each detail.weighIns as [ms, lbs]}
+                <tr>
+                  <td>{fmtDateTime(ms)}</td>
+                  <td class="num"><span class="pill weight">{fmtLbs(lbs)}</span></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+      {#if detail.meals.length}
+        <p class="modal-sub">Food dispensed ({detail.meals.length})</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>When</th><th>Meal</th><th class="num">Dispensed</th></tr></thead>
+            <tbody>
+              {#each detail.meals as m}
+                <tr>
+                  <td>{fmtDateTime(m.ms)}</td>
+                  <td>{m.name || (m.type === "snack" ? "Snack" : "Meal")}</td>
+                  <td class="num">{fmtCups(m.cups)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    {/if}
+  </Modal>
+{/if}

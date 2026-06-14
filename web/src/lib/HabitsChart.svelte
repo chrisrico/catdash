@@ -5,7 +5,17 @@
   // Visit COUNT comes from weights.raw; the duration RANGE (time-in-box) comes
   // from the backend (it needs the wait-time) as per-visit samples we bucket.
   import Chart from "./Chart.svelte";
-  import { bucketUnit, bucketBy, sum, bucketStartMs, median } from "./api.js";
+  import Modal from "./Modal.svelte";
+  import {
+    bucketUnit,
+    bucketBy,
+    sum,
+    bucketStartMs,
+    fmtBucket,
+    fmtLbs,
+    fmtDateTime,
+    median,
+  } from "./api.js";
   import { palette, baseOption, timeAxis, valueAxis } from "./echarts.js";
   import { themeState } from "./theme.svelte.js";
 
@@ -13,6 +23,9 @@
 
   const DAY = 86400000;
   const MIN = 60;
+
+  // Compact duration label for a single visit (seconds).
+  const fmtDur = (sec) => (sec < 90 ? `${sec}s` : `${(sec / 60).toFixed(1)} min`);
 
   // Approximate time-in-box (median overall) for the summary line.
   const durationLabel = $derived.by(() => {
@@ -54,6 +67,60 @@
 
   const fmtHour = (h) => `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? "a" : "p"}`;
 
+  // Bucket granularity (day/week/month) lifted out of the option closure so the
+  // hover header and the click-to-detail modal floor timestamps the same way the
+  // bars do.
+  const unit = $derived.by(() => {
+    const span = perDay.length > 1 ? (perDay[perDay.length - 1][0] - perDay[0][0]) / DAY : 0;
+    return bucketUnit(span);
+  });
+
+  // --- Click-to-detail: the clicked bucket and the visits/durations within it ---
+  let clickedMs = $state(null);
+  const clickedBucket = $derived(clickedMs == null ? null : bucketStartMs(clickedMs, unit));
+
+  const MATCH_WINDOW = 30 * 60 * 1000; // weigh-in → its clean cycle, in ms
+
+  const detail = $derived.by(() => {
+    if (clickedBucket == null) return null;
+    const inBucket = (ms) => bucketStartMs(ms, unit) === clickedBucket;
+    // A visit produces a weigh-in (weight) and, minutes later, a clean cycle
+    // that yields the time-in-box sample — two separate series that share no
+    // timestamp. Stitch them into one row per visit: pair each duration with the
+    // nearest preceding weigh-in (within MATCH_WINDOW); leave weight or duration
+    // blank when its half of the pair is missing.
+    const weighIns = (weights?.raw ?? [])
+      .map((r) => ({ ms: new Date(r.timestamp).getTime(), weight: r.weight_lbs }))
+      .filter((w) => inBucket(w.ms))
+      .sort((a, b) => a.ms - b.ms);
+    const durs = (duration?.samples ?? [])
+      .map(([t, sec]) => ({ ms: new Date(t).getTime(), sec }))
+      .filter((d) => inBucket(d.ms))
+      .sort((a, b) => a.ms - b.ms);
+
+    const used = new Set();
+    const rows = [];
+    for (const d of durs) {
+      let match = -1;
+      for (let i = 0; i < weighIns.length; i++) {
+        if (used.has(i)) continue;
+        const w = weighIns[i];
+        if (w.ms <= d.ms && d.ms - w.ms <= MATCH_WINDOW) match = i; // nearest preceding
+      }
+      if (match >= 0) {
+        used.add(match);
+        rows.push({ ms: weighIns[match].ms, weight: weighIns[match].weight, sec: d.sec });
+      } else {
+        rows.push({ ms: d.ms, weight: null, sec: d.sec });
+      }
+    }
+    weighIns.forEach((w, i) => {
+      if (!used.has(i)) rows.push({ ms: w.ms, weight: w.weight, sec: null });
+    });
+    rows.sort((a, b) => a.ms - b.ms);
+    return { rows };
+  });
+
   // Nearest-rank percentile (fine for the small per-bucket samples).
   const pct = (sorted, p) => (sorted.length ? sorted[Math.round(p * (sorted.length - 1))] : 0);
 
@@ -74,9 +141,6 @@
 
   const option = $derived.by(() => {
     const c = palette(themeState.resolved);
-    const span =
-      perDay.length > 1 ? (perDay[perDay.length - 1][0] - perDay[0][0]) / DAY : 0;
-    const unit = bucketUnit(span);
     const bucketMs = unit === "month" ? 2629800000 : unit === "week" ? 604800000 : DAY;
 
     const samples = (duration?.samples ?? []).map(([t, s]) => [new Date(t).getTime(), s]);
@@ -146,10 +210,9 @@
         ...base.tooltip,
         formatter: (ps) => {
           const arr = Array.isArray(ps) ? ps : [ps];
-          let head = "";
+          const head = arr.length ? fmtBucket(bucketStartMs(arr[0].axisValue, unit), unit) : "";
           const lines = [];
           for (const p of arr) {
-            head = p.axisValueLabel ?? head;
             if (p.seriesType === "custom") {
               const v = p.value; // [t, p10, median, p90] (minutes)
               lines.push(
@@ -193,7 +256,7 @@
     <b>{summary.avg.toFixed(1)}</b> visits/day · busiest around <b>{fmtHour(summary.peak)}</b>{#if durationLabel}{" · "}<b>{durationLabel}</b> in box{/if}
     <span class="habits-sub">· {summary.total} visits over {summary.days} days</span>
   </p>
-  <Chart {option} />
+  <Chart {option} onBucketClick={(ms) => (clickedMs = ms)} />
   <div class="hour-strip" aria-label="visits by time of day">
     {#each byHour as n, h}
       <div class="hour-col" title="{fmtHour(h)} — {n} visit{n === 1 ? '' : 's'}">
@@ -204,4 +267,30 @@
   <div class="hour-axis">
     <span>12a</span><span>6a</span><span>12p</span><span>6p</span><span>11p</span>
   </div>
+{/if}
+
+{#if detail}
+  <Modal title={fmtBucket(clickedBucket, unit)} onClose={() => (clickedMs = null)}>
+    {#if !detail.rows.length}
+      <div class="empty">No visits in this period.</div>
+    {:else}
+      <p class="modal-sub">Visits ({detail.rows.length})</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>When</th><th class="num">Weight</th><th class="num">Time in box</th></tr></thead>
+          <tbody>
+            {#each detail.rows as row}
+              <tr>
+                <td>{fmtDateTime(row.ms)}</td>
+                <td class="num">
+                  {#if row.weight != null}<span class="pill weight">{fmtLbs(row.weight)}</span>{/if}
+                </td>
+                <td class="num">{row.sec != null ? fmtDur(row.sec) : ""}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </Modal>
 {/if}

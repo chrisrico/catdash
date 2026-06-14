@@ -50,6 +50,17 @@ export function bucketUnit(spanDays) {
   return "month";
 }
 
+// Human label for a bucket start, matching the active granularity. Used as the
+// hover-tooltip header and the click-to-detail modal title.
+export function fmtBucket(ms, unit) {
+  const d = new Date(ms);
+  if (unit === "month")
+    return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  if (unit === "week")
+    return "Week of " + d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 // Floor a millisecond timestamp to the start of its day / ISO-week / month (local).
 export function bucketStartMs(ms, unit) {
   const d = new Date(ms);
