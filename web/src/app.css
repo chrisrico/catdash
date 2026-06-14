@@ -77,6 +77,30 @@ h1 { font-size: 1.4rem; margin: 0; letter-spacing: -0.01em; }
 .btn:hover { filter: brightness(1.08); }
 .btn:disabled { opacity: 0.5; cursor: progress; }
 
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: 4px 0 22px;
+  /* Default overflow:visible — NOT a scroll container, so the bar can't be
+     wheel-scrolled. The few short tabs always fit, so no scrolling is needed. */
+}
+.tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 10px 16px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: -1px;
+  white-space: nowrap;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -179,9 +203,29 @@ tbody tr:hover { background: var(--panel-2); }
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow);
 }
 .robot.offline { opacity: 0.65; }
+/* Live marker dot on the Live tab — green always, pulses while streaming live. */
+.tab-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+  margin-right: 7px;
+  vertical-align: middle;
+}
+.tab-dot.on {
+  box-shadow: 0 0 0 0 rgba(87, 217, 119, 0.5);
+  animation: live-pulse 2s ease-out infinite;
+}
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(87, 217, 119, 0.45); }
+  70% { box-shadow: 0 0 0 6px rgba(87, 217, 119, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(87, 217, 119, 0); }
+}
 .robot-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .robot-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .robot-title h3 { margin: 0; font-size: 1.05rem; letter-spacing: -0.01em; }
@@ -248,3 +292,47 @@ tbody tr:hover { background: var(--panel-2); }
   font-size: 0.76rem;
 }
 .robot-error { color: var(--bad); font-size: 0.82rem; margin-top: 10px; }
+
+/* Label with a hover/focus tooltip (replaces always-on helper text). */
+.has-tip {
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 3px;
+  cursor: help;
+  position: relative;
+  outline: none;
+}
+.has-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  width: max-content;
+  max-width: 230px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 0.76rem;
+  font-weight: 400;
+  line-height: 1.35;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.has-tip:hover::after,
+.has-tip:focus-visible::after { opacity: 1; }
+
+/* Read-only feeding schedule. */
+.schedule { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.schedule-head { font-size: 0.74rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+.schedule-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; font-size: 0.84rem; padding: 4px 0; }
+.schedule-row.dim { opacity: 0.5; }
+.schedule-time { font-variant-numeric: tabular-nums; min-width: 66px; font-weight: 600; }
+.schedule-name { flex: 1 1 auto; }
+.schedule-days { color: var(--muted); font-size: 0.76rem; }
+.schedule-portion { color: var(--muted); font-variant-numeric: tabular-nums; }
+.schedule-flag { color: var(--accent-2); font-size: 0.7rem; border: 1px solid rgba(240, 136, 62, 0.4); border-radius: 4px; padding: 0 5px; }
+.schedule-note { color: var(--muted); font-size: 0.72rem; margin-top: 8px; font-style: italic; }

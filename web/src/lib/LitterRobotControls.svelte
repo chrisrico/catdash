@@ -116,7 +116,7 @@
     </div>
 
     <div class="ctl-row">
-      <span class="ctl-label">Panel lock <small>disable the buttons on the unit</small></span>
+      <span class="ctl-label has-tip" data-tip="Disables the physical buttons on the unit." tabindex="0">Panel lock</span>
       <button class="toggle" class:on={robot.panel_lock_enabled} disabled={busy}
         onclick={() => run("panel-lock", { locked: !robot.panel_lock_enabled })}>
         {robot.panel_lock_enabled ? "On" : "Off"}
@@ -124,7 +124,7 @@
     </div>
 
     <div class="ctl-row">
-      <span class="ctl-label">LitterHopper <small>{robot.hopper_status ?? "not installed"}</small></span>
+      <span class="ctl-label has-tip" data-tip="The automatic litter-refill accessory. Off disables/removes it ({robot.hopper_status ?? 'not installed'})." tabindex="0">LitterHopper</span>
       <button class="toggle" class:on={!robot.is_hopper_removed} disabled={busy}
         onclick={() => run("hopper", { removed: !robot.is_hopper_removed })}>
         {robot.is_hopper_removed ? "Off" : "On"}
@@ -132,10 +132,10 @@
     </div>
 
     <div class="ctl-row">
-      <span class="ctl-label">Power</span>
+      <span class="ctl-label has-tip" data-tip="Turns the unit off. There's no remote power-on — once it's off you must press the physical Power button on the unit to turn it back on." tabindex="0">Power</span>
       <button class="toggle" class:on={robot.power_on} disabled={busy}
         onclick={() => robot.power_on
-          ? confirmRun(`Turn ${robot.name} OFF? It won't clean until powered back on.`, "power", { on: false })
+          ? confirmRun(`Turn ${robot.name} OFF?\n\nThe Litter-Robot 4 has NO remote power-on — once it's off you'll have to press the physical Power button on the unit to turn it back on. It also won't clean until then.`, "power", { on: false })
           : run("power", { on: true })}>
         {robot.power_on ? "On" : "Off"}
       </button>

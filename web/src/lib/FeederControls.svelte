@@ -8,7 +8,34 @@
   const cupsLabel = (c) => (c === 0.25 ? "¼ cup" : c === 0.125 ? "⅛ cup" : `${c} cup`);
   const fillClass = (pct) => (pct <= 10 ? "bad" : pct <= 30 ? "warn" : "");
 
+  const confirmRun = (msg, path, body) => {
+    if (confirm(msg)) run(path, body);
+  };
+
   const dotClass = $derived(!robot.online ? "bad" : robot.power_on ? "ok" : "bad");
+
+  // Schedule helpers (read-only display).
+  const fmtMealTime = (h, m) => {
+    const d = new Date();
+    d.setHours(h ?? 0, m ?? 0, 0, 0);
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  };
+  const localToday = () => {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+  // Only flag a skip that's today or later (past skips are spent).
+  const upcomingSkip = (skip) => skip && skip >= localToday();
+  const fmtSkip = (skip) => {
+    const [y, mo, da] = skip.split("-").map(Number);
+    return new Date(y, mo - 1, da).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  };
+
+  const meals = $derived(robot.schedule?.meals ?? []);
 </script>
 
 <div class="robot" class:offline={!robot.online}>
@@ -56,9 +83,11 @@
     </div>
 
     <div class="ctl-row">
-      <span class="ctl-label">Gravity mode <small>free-feed when the bowl empties</small></span>
+      <span class="ctl-label has-tip" data-tip="Free-feeds — keeps the bowl full, topping it up about every 6 hours. Enabling dispenses food." tabindex="0">Gravity mode</span>
       <button class="toggle" class:on={robot.gravity_mode_enabled} disabled={busy}
-        onclick={() => run("gravity-mode", { on: !robot.gravity_mode_enabled })}>
+        onclick={() => robot.gravity_mode_enabled
+          ? run("gravity-mode", { on: false })
+          : confirmRun(`Enable gravity mode on ${robot.name}?\n\nThe feeder will dispense food to keep the bowl full and keep topping it up about every 6 hours, instead of following the schedule.`, "gravity-mode", { on: true })}>
         {robot.gravity_mode_enabled ? "On" : "Off"}
       </button>
     </div>
@@ -72,13 +101,32 @@
     </div>
 
     <div class="ctl-row">
-      <span class="ctl-label">Panel lock <small>disable the buttons on the unit</small></span>
+      <span class="ctl-label has-tip" data-tip="Disables the physical buttons on the unit." tabindex="0">Panel lock</span>
       <button class="toggle" class:on={robot.panel_lock_enabled} disabled={busy}
         onclick={() => run("panel-lock", { locked: !robot.panel_lock_enabled })}>
         {robot.panel_lock_enabled ? "On" : "Off"}
       </button>
     </div>
   </div>
+
+  {#if meals.length}
+    <div class="schedule">
+      <div class="schedule-head">
+        {robot.schedule?.name ? `Feeding schedule · ${robot.schedule.name}` : "Feeding schedule"}
+      </div>
+      {#each meals as m}
+        <div class="schedule-row" class:dim={m.paused}>
+          <span class="schedule-time">{fmtMealTime(m.hour, m.minute)}</span>
+          <span class="schedule-name">{m.name}</span>
+          <span class="schedule-days">{m.every_day ? "Every day" : m.days.join(" ")}</span>
+          <span class="schedule-portion">{m.cups != null ? fmtCups(m.cups) : `${m.portions}×`}</span>
+          {#if m.paused}<span class="schedule-flag">paused</span>{/if}
+          {#if upcomingSkip(m.skip)}<span class="schedule-flag">skip {fmtSkip(m.skip)}</span>{/if}
+        </div>
+      {/each}
+      <div class="schedule-note">View only — edit meals in the Whisker app for now.</div>
+    </div>
+  {/if}
 
   {#if error}<div class="robot-error">{error}</div>{/if}
 </div>

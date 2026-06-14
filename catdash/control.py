@@ -20,6 +20,7 @@ from typing import Any, Awaitable, Callable
 
 from pylitterbot import Account
 from pylitterbot.enums import BrightnessLevel, NightLightMode
+from pylitterbot.event import EVENT_UPDATE
 from pylitterbot.exceptions import InvalidCommandException
 
 from .config import get_settings
@@ -55,6 +56,50 @@ def _is_feeder(robot: Any) -> bool:
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if isinstance(value, datetime) else None
+
+
+# Mon-first ordering for displaying a meal's repeat days consistently.
+_WEEKDAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _serialize_schedule(robot: Any) -> dict | None:
+    """Read-only view of the Feeder-Robot's active feeding schedule.
+
+    pylitterbot fetches the schedule (it computes `next_feeding` from it) but
+    exposes no accessor, so we read it from the raw data via the public
+    to_dict(). Editing/skipping meals isn't supported by the library.
+    """
+    state = robot.to_dict().get("state") or {}
+    sched = state.get("active_schedule") or {}
+    raw_meals = sched.get("meals") or []
+    insert = robot.meal_insert_size or 0
+    meals = []
+    for meal in raw_meals:
+        if not isinstance(meal, dict):
+            continue
+        days = [d for d in _WEEKDAY_ORDER if d in (meal.get("days") or [])]
+        portions = meal.get("portions")
+        skip = meal.get("skip")
+        # The "no skip" sentinel is a year-0000 date; treat anything else as a
+        # real skip date and let the client decide if it's still upcoming.
+        skip_date = (
+            skip[:10] if isinstance(skip, str) and not skip.startswith("0000") else None
+        )
+        meals.append(
+            {
+                "name": meal.get("name"),
+                "hour": meal.get("hour"),
+                "minute": meal.get("minute"),
+                "days": days,
+                "every_day": len(days) == 7,
+                "portions": portions,
+                "cups": round(portions * insert, 4) if portions and insert else None,
+                "paused": bool(meal.get("paused")),
+                "skip": skip_date,
+            }
+        )
+    meals.sort(key=lambda m: ((m["hour"] or 0), (m["minute"] or 0)))
+    return {"name": sched.get("name"), "meals": meals}
 
 
 def _serialize_litter_robot(robot: Any, *, firmware_update_available: bool) -> dict:
@@ -121,6 +166,7 @@ def _serialize_feeder(robot: Any) -> dict:
         "valid_meal_insert_sizes": sorted(robot.VALID_MEAL_INSERT_SIZES),
         "power_type": robot.power_type,
         "next_feeding": _iso(robot.next_feeding),
+        "schedule": _serialize_schedule(robot),
         "last_feeding": (
             {
                 "timestamp": _iso(last.get("timestamp")),
@@ -191,6 +237,14 @@ class WhiskerControl:
     def __init__(self) -> None:
         self._account: Account | None = None
         self._lock = asyncio.Lock()
+        # Live streaming: each connected SSE client gets a queue; robot
+        # EVENT_UPDATE callbacks broadcast fresh snapshots into all of them.
+        self._subscribers: set[asyncio.Queue] = set()
+        self._streaming = False
+        self._update_unsubs: list[Callable[[], None]] = []
+        # has_firmware_update() is an extra network call we only make in
+        # list_robots; cache it so streamed snapshots can reuse the value.
+        self._fw_cache: dict[str, bool] = {}
 
     async def _connect(self) -> Account:
         settings = get_settings()
@@ -212,9 +266,16 @@ class WhiskerControl:
         return self._account
 
     async def _reset(self) -> None:
+        for unsub in self._update_unsubs:
+            try:
+                unsub()
+            except Exception:  # noqa: BLE001
+                pass
+        self._update_unsubs.clear()
+        self._streaming = False
         if self._account is not None:
             try:
-                await self._account.disconnect()
+                await self._account.disconnect()  # also unsubscribes the websockets
             except Exception:  # noqa: BLE001 - best-effort teardown
                 pass
             self._account = None
@@ -262,6 +323,7 @@ class WhiskerControl:
                         fw_available = await robot.has_firmware_update()
                     except Exception:  # noqa: BLE001 - cached, non-critical extra call
                         fw_available = False
+                    self._fw_cache[robot.id] = fw_available
                     out.append(
                         _serialize_litter_robot(
                             robot, firmware_update_available=fw_available
@@ -273,6 +335,83 @@ class WhiskerControl:
 
         async with self._lock:
             return await self._run(op)
+
+    # --- Live streaming (Server-Sent Events) ---------------------------------
+
+    def _snapshot_robot(self, robot: Any) -> dict | None:
+        """Serialize a robot for a live push (no network — uses cached state)."""
+        if _is_litter_robot(robot):
+            return _serialize_litter_robot(
+                robot, firmware_update_available=self._fw_cache.get(robot.id, False)
+            )
+        if _is_feeder(robot):
+            return _serialize_feeder(robot)
+        return None
+
+    def _broadcast(self, snapshot: dict) -> None:
+        """Push a snapshot to every connected SSE client."""
+        item = {"robot": snapshot}
+        for queue in list(self._subscribers):
+            try:
+                queue.put_nowait(item)
+            except asyncio.QueueFull:  # pragma: no cover - queues are unbounded
+                pass
+
+    def _make_update_callback(self, robot: Any) -> Callable[[], None]:
+        def _on_update() -> None:
+            snapshot = self._snapshot_robot(robot)
+            if snapshot is not None:
+                self._broadcast(snapshot)
+
+        return _on_update
+
+    async def _ensure_streaming(self) -> None:
+        """Open the per-robot WebSocket subscriptions once, lazily."""
+        async with self._lock:
+            if self._streaming:
+                return
+            self._streaming = True
+            account = await self._account_ready()
+            robots = [
+                r for r in account.robots if _is_litter_robot(r) or _is_feeder(r)
+            ]
+            for robot in robots:
+                self._update_unsubs.append(
+                    robot.on(EVENT_UPDATE, self._make_update_callback(robot))
+                )
+        # Subscribe outside the lock: the WebSocket handshake can be slow and we
+        # don't want to block control commands on it.
+        for robot in robots:
+            try:
+                await robot.subscribe()
+            except Exception:  # noqa: BLE001
+                logger.exception("websocket subscribe failed for %s", robot.serial)
+
+    async def stream(self):
+        """Async generator of `{robot}` snapshots: the current cached state for
+        each robot first (the instant fallback), then live pushes as the
+        WebSocket delivers them. Heartbeats keep the connection from idling out."""
+        queue: asyncio.Queue = asyncio.Queue()
+        async with self._lock:
+            account = await self._account_ready()
+            initial = [
+                {"robot": snap}
+                for robot in account.robots
+                if (snap := self._snapshot_robot(robot)) is not None
+            ]
+            self._subscribers.add(queue)
+        try:
+            # Cached snapshots immediately, before the (possibly slow) WS connect.
+            for item in initial:
+                yield item
+            await self._ensure_streaming()
+            while True:
+                try:
+                    yield await asyncio.wait_for(queue.get(), timeout=20)
+                except asyncio.TimeoutError:
+                    yield {"heartbeat": True}
+        finally:
+            self._subscribers.discard(queue)
 
     async def run_command(self, robot_id: str, action: str, value: dict) -> dict:
         """Dispatch a command, then return the robot's post-command snapshot."""

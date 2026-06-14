@@ -11,8 +11,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import json
+
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from . import db
@@ -281,6 +288,30 @@ async def api_robots() -> list[dict]:
         return await control.list_robots()
     except ControlUnavailable as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/api/robots/stream", dependencies=[Depends(require_controls)])
+async def api_robots_stream() -> StreamingResponse:
+    """Server-Sent Events: each robot's cached snapshot first, then live pushes
+    from the Whisker WebSocket. The dashboard renders the cached data instantly
+    and updates in place as events arrive (no polling while the stream is up)."""
+
+    async def events():
+        async for item in control.stream():
+            if item.get("heartbeat"):
+                yield ": ping\n\n"  # SSE comment; keeps the connection warm
+            else:
+                yield f"data: {json.dumps(item)}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
+        },
+    )
 
 
 # Litter-Robot commands. Each takes the JSON body as the command's `value` dict;

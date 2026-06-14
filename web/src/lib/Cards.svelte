@@ -1,14 +1,12 @@
 <script>
-  import { fmtCups, fmtDateTime } from "./api.js";
+  import { fmtDateTime } from "./api.js";
 
   let { stats } = $props();
 
   const cards = $derived.by(() => {
     const w = stats.weight;
     const u = stats.usage;
-    const f = stats.feeder || {};
     const flt = stats.faults || { count: 0, last: null };
-    const lf = f.last_feeding;
 
     const out = [
       {
@@ -32,24 +30,6 @@
             : null,
       },
     ];
-
-    if (f.feedings || f.food_level != null) {
-      out.push(
-        {
-          label: "Food level",
-          value: f.food_level != null ? f.food_level : "—",
-          unit: f.food_level != null ? "%" : "",
-        },
-        {
-          label: "Fed (last 24h)",
-          value: f.last_24h_cups != null ? Number(f.last_24h_cups).toFixed(2) : "—",
-          unit: f.last_24h_cups != null ? " cups" : "",
-          delta: lf
-            ? { cls: "flat", text: `last: ${lf.name} · ${fmtDateTime(lf.timestamp)}` }
-            : null,
-        }
-      );
-    }
 
     out.push({
       label: "Faults",

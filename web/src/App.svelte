@@ -21,10 +21,42 @@
   );
   let ready = $state(false);
 
+  // Whether the remote-control surface exists (CONTROLS_ENABLED on the server).
+  // Gates the "Live" tab; resolved once at load via /api/config.
+  let controlsEnabled = $state(false);
+  let configLoaded = $state(false);
+  let activeTab = $state(loadPersisted("tab", "live"));
+  // Bound from <Robots>: true while its live stream is connected. Shown as a dot
+  // on the Live tab. Reset when we leave the tab (the stream closes then).
+  let streamLive = $state(false);
+
+  // The "Live" tab only exists when control is enabled; the history views are
+  // split out of one long scroll into Trends (cards + charts) and Activity.
+  const TABS = $derived([
+    ...(controlsEnabled ? [{ key: "live", label: "Live" }] : []),
+    { key: "trends", label: "Trends" },
+    { key: "activity", label: "Activity" },
+  ]);
+
   $effect(() => {
     savePersisted("petId", petId);
     savePersisted("range", range);
     savePersisted("activityTypes", activityTypes);
+    savePersisted("tab", activeTab);
+  });
+
+  $effect(() => {
+    // Once we know whether controls exist, fall back to a valid tab if the
+    // saved one isn't available (e.g. "live" saved but controls are off).
+    if (configLoaded && !TABS.some((t) => t.key === activeTab)) {
+      activeTab = TABS[0].key;
+    }
+  });
+
+  $effect(() => {
+    // <Robots> only streams while it's mounted (the Live tab); off the tab the
+    // stream is closed, so the dot shouldn't claim "live".
+    if (activeTab !== "live") streamLive = false;
   });
 
   // Keep <html data-theme> in sync with the resolved theme (preference or, for
@@ -113,6 +145,18 @@
       statusError = true;
     } finally {
       ready = true;
+    }
+  }
+
+  // Ask the server whether remote control is enabled, so we know whether to show
+  // the Live tab. configLoaded flips regardless of outcome so the UI never hangs.
+  async function loadConfig() {
+    try {
+      controlsEnabled = !!(await fetchJSON("/api/config")).controls_enabled;
+    } catch (err) {
+      console.warn("[catdash] /api/config failed:", err);
+    } finally {
+      configLoaded = true;
     }
   }
 
@@ -206,6 +250,7 @@
   });
 
   loadPets();
+  loadConfig();
 </script>
 
 <header class="topbar">
@@ -222,63 +267,77 @@
   </div>
 </header>
 
-<Robots />
+{#if configLoaded}
+  <nav class="tabs">
+    {#each TABS as t}
+      <button class="tab" class:active={activeTab === t.key} onclick={() => (activeTab = t.key)}>
+        {#if t.key === "live"}<span class="tab-dot" class:on={streamLive}></span>{/if}{t.label}
+      </button>
+    {/each}
+  </nav>
 
-<Controls {pets} bind:petId bind:range />
+  {#if activeTab === "live"}
+    <Robots bind:live={streamLive} />
+  {:else if activeTab === "trends"}
+    <Controls {pets} bind:petId bind:range />
 
-{#if sections.stats.data}
-  <Cards stats={sections.stats.data} />
-{:else if sections.stats.error}
-  <div class="panel-error">Stats failed to load: {sections.stats.error}</div>
+    {#if sections.stats.data}
+      <Cards stats={sections.stats.data} />
+    {:else if sections.stats.error}
+      <div class="panel-error">Stats failed to load: {sections.stats.error}</div>
+    {/if}
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Weight</h2>
+        <span class="hint">Weigh-in trend (median per bucket) · 7-day average · raw weigh-ins</span>
+      </div>
+      {#if sections.weights.data}
+        <WeightChart weights={sections.weights.data} />
+      {:else if sections.weights.error}
+        <div class="panel-error">Weights failed to load: {sections.weights.error}</div>
+      {/if}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Usage</h2>
+        <span class="hint">Clean cycles &amp; weigh-ins per day</span>
+      </div>
+      {#if sections.usage.data}
+        <UsageChart usage={sections.usage.data} />
+      {:else if sections.usage.error}
+        <div class="panel-error">Usage failed to load: {sections.usage.error}</div>
+      {/if}
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Feeder</h2>
+        <span class="hint">Food dispensed (bucketed by range) &amp; hopper level over time</span>
+      </div>
+      {#if sections.food.data}
+        <FeederChart food={sections.food.data} />
+      {:else if sections.food.error}
+        <div class="panel-error">Feeder data failed to load: {sections.food.error}</div>
+      {/if}
+    </section>
+  {:else if activeTab === "activity"}
+    <Controls {pets} bind:petId bind:range />
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Recent activity</h2>
+        <ActivityFilter bind:selected={activityTypes} />
+      </div>
+      {#if sections.activities.data}
+        <ActivityTable activities={sections.activities.data} />
+      {:else if sections.activities.error}
+        <div class="panel-error">Activity failed to load: {sections.activities.error}</div>
+      {/if}
+    </section>
+  {/if}
 {/if}
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Weight</h2>
-    <span class="hint">Weigh-in trend (median per bucket) · 7-day average · raw weigh-ins</span>
-  </div>
-  {#if sections.weights.data}
-    <WeightChart weights={sections.weights.data} />
-  {:else if sections.weights.error}
-    <div class="panel-error">Weights failed to load: {sections.weights.error}</div>
-  {/if}
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Usage</h2>
-    <span class="hint">Clean cycles &amp; weigh-ins per day</span>
-  </div>
-  {#if sections.usage.data}
-    <UsageChart usage={sections.usage.data} />
-  {:else if sections.usage.error}
-    <div class="panel-error">Usage failed to load: {sections.usage.error}</div>
-  {/if}
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Feeder</h2>
-    <span class="hint">Food dispensed (bucketed by range) &amp; hopper level over time</span>
-  </div>
-  {#if sections.food.data}
-    <FeederChart food={sections.food.data} />
-  {:else if sections.food.error}
-    <div class="panel-error">Feeder data failed to load: {sections.food.error}</div>
-  {/if}
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Recent activity</h2>
-    <ActivityFilter bind:selected={activityTypes} />
-  </div>
-  {#if sections.activities.data}
-    <ActivityTable activities={sections.activities.data} />
-  {:else if sections.activities.error}
-    <div class="panel-error">Activity failed to load: {sections.activities.error}</div>
-  {/if}
-</section>
 
 <footer class="foot">
   <span>{footnote}</span>

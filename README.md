@@ -171,7 +171,10 @@ The dashboard is built on a small JSON API you can also use directly:
 [Remote control](#remote-control):
 
 - `GET /api/robots` — live snapshot of every Litter-Robot + Feeder (status,
-  litter/drawer levels, wait time, night light, power, food level, …)
+  litter/drawer levels, wait time, night light, power, food level, feeder
+  schedule, …)
+- `GET /api/robots/stream` — Server-Sent Events: the cached snapshot, then live
+  pushes as the Whisker WebSocket delivers them (the dashboard's real-time feed)
 - `POST /api/robots/{id}/clean` — start a clean cycle
 - `POST /api/robots/{id}/power` · `/wait-time` · `/night-light` · `/panel-lock` ·
   `/panel-brightness` · `/name` · `/reset` · `/hopper` · `/firmware-update`
@@ -184,12 +187,19 @@ Each command returns the robot's post-command snapshot (`{ok, robot}`).
 
 By default catdash is **read-only** — it collects and visualizes history and
 never sends a command to a robot. Set **`CONTROLS_ENABLED=true`** to unlock a
-**Robots** panel that mirrors the core of the Whisker app: each unit's live
-status and gauges plus controls to start a clean cycle, change the wait time,
-toggle the night light / panel lock / power, enable the LitterHopper, and — for
-the Feeder — give a snack, switch gravity mode, or set the portion size. It talks
-to Whisker through the same [`pylitterbot`](https://github.com/natekspencer/pylitterbot)
-client the collector uses, over one reused, lazily-connected session.
+**Robots** panel (the "Live" tab) that mirrors the core of the Whisker app: each
+unit's live status and gauges plus controls to start a clean cycle, change the
+wait time, toggle the night light / panel lock / power, enable the LitterHopper,
+and — for the Feeder — give a snack, switch gravity mode, set the portion size,
+and view the feeding schedule. It talks to Whisker through the same
+[`pylitterbot`](https://github.com/natekspencer/pylitterbot) client the collector
+uses, over one reused, lazily-connected session.
+
+The panel updates **in real time**: it shows the last-known snapshot instantly,
+then streams live changes over the same WebSocket the Whisker app uses (surfaced
+to the browser as Server-Sent Events), falling back to polling if the stream
+drops. Some settings the unit reflects with a few seconds' delay (panel lock,
+hopper) — the toggle catches up automatically when the live update arrives.
 
 > **This is a real switch, not a view.** The dashboard has **no authentication**,
 > so with controls on, anyone who can reach the page can power off your robot or
@@ -198,8 +208,11 @@ client the collector uses, over one reused, lazily-connected session.
 > already relies on. With the flag off, the control endpoints don't exist at all.
 
 Not yet implemented (the Whisker app has them; `pylitterbot` doesn't expose
-them, so they're deferred): editing the **sleep schedule**, **resetting the
-waste-drawer gauge**, and **push notifications**.
+them, so they're deferred): **editing** the feeding schedule (it's view-only
+here — skip/pause/add meals), editing the **sleep schedule**, **resetting the
+waste-drawer gauge**, and **push notifications**. Powering a unit *off* is
+supported but one-way from here — the Litter-Robot 4 has no remote power-on, so
+the dashboard warns before doing it.
 
 ## Local development
 
