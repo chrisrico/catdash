@@ -361,11 +361,13 @@ tbody tr:hover { background: var(--panel-2); }
 .schedule-note { color: var(--muted); font-size: 0.72rem; margin-top: 8px; font-style: italic; }
 
 /* Click-to-detail dialog (drilling into a chart's time bucket). Sits above the
-   .has-tip tooltip (z-index 20). */
+   .has-tip tooltip (z-index 20) and the ECharts value box, whose DOM carries an
+   inline z-index: 9999999 — so on touch, a tooltip revived as the modal opens
+   can't paint over it. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: 10000000;
   display: flex;
   align-items: center;
   justify-content: center;
