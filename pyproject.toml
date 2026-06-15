@@ -10,7 +10,9 @@ dependencies = [
     "uvicorn[standard]>=0.49.0",
 ]
 
-# Use the local pylitterbot checkout (branch feeder-schedule-write) for the
-# feeder schedule write support until it lands upstream.
+# Feeder schedule-write support from the fork until it lands upstream.
+# NOTE: before deploying, create/push github.com/chrisrico/pylitterbot @
+# feature-schedule-write, then run `uv lock` to pin it (the lockfile still
+# references the local checkout until then).
 [tool.uv.sources]
-pylitterbot = { path = "../pylitterbot", editable = true }
+pylitterbot = { git = "https://github.com/chrisrico/pylitterbot", branch = "feature-schedule-write" }

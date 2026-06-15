@@ -132,10 +132,12 @@
                 onclick={() => run("pause-meal", { meal_number: m.meal_number, paused: !m.paused })}>
                 {m.paused ? "Paused" : "Pause"}
               </button>
-              <button class="chip" class:active={upcomingSkip(m.skip)} disabled={busy}
-                onclick={() => run("skip-meal", { meal_number: m.meal_number, skip: !upcomingSkip(m.skip) })}>
-                {upcomingSkip(m.skip) ? `Skip ${fmtSkip(m.skip)} ✕` : "Skip next"}
-              </button>
+              {#if !isDispensed(m)}
+                <button class="chip" class:active={upcomingSkip(m.skip)} disabled={busy}
+                  onclick={() => run("skip-meal", { meal_number: m.meal_number, skip: !upcomingSkip(m.skip) })}>
+                  {upcomingSkip(m.skip) ? `Skip ${fmtSkip(m.skip)} ✕` : "Skip next"}
+                </button>
+              {/if}
             </span>
           {/if}
         </div>
