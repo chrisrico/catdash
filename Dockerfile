@@ -14,8 +14,10 @@ FROM python:3.12-slim
 # tzdata so a TZ override (or a symlinked host /etc/localtime) resolves to a real
 # zone; without it glibc falls back to UTC. The compose file bind-mounts the host's
 # /etc/localtime, so by default the container follows the host timezone.
+# git so `uv sync` can fetch the pylitterbot dependency from its git source (the
+# feeder schedule-write fork, until that support is released on PyPI).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata \
+    && apt-get install -y --no-install-recommends tzdata git \
     && rm -rf /var/lib/apt/lists/*
 
 # The process holds Whisker credentials in its environment, so it runs as a
