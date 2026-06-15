@@ -120,39 +120,37 @@
       <div class="schedule-head">
         {robot.schedule?.name ? `Feeding schedule · ${robot.schedule.name}` : "Feeding schedule"}
       </div>
-      {#each meals as m}
-        <div class="schedule-row" class:dim={m.paused} class:done={isDispensed(m)}>
-          <span class="schedule-time">{fmtMealTime(m.hour, m.minute)}</span>
-          <span class="schedule-name">{m.name}</span>
-          <span class="schedule-days">{m.every_day ? "Every day" : m.days.join(" ")}</span>
-          <span class="schedule-portion">{m.cups != null ? fmtCups(m.cups) : `${m.portions}×`}</span>
-          {#if m.meal_number != null}
-            <span class="schedule-actions">
-              <button class="chip" class:active={m.paused} disabled={busy}
-                onclick={() => run("pause-meal", { meal_number: m.meal_number, paused: !m.paused })}>
-                {m.paused ? "Paused" : "Pause"}
-              </button>
-              {#if !isDispensed(m)}
-                <button class="chip" class:active={upcomingSkip(m.skip)} disabled={busy}
-                  onclick={() => run("skip-meal", { meal_number: m.meal_number, skip: !upcomingSkip(m.skip) })}>
-                  {upcomingSkip(m.skip) ? `Skip ${fmtSkip(m.skip)} ✕` : "Skip next"}
-                </button>
-              {/if}
-            </span>
-          {/if}
-        </div>
-      {/each}
+      <table class="schedule-table">
+        <tbody>
+          {#each meals as m}
+            <tr class:dim={m.paused} class:done={isDispensed(m)}>
+              <td class="schedule-time">{fmtMealTime(m.hour, m.minute)}</td>
+              <td class="schedule-name">{m.name}</td>
+              <td class="schedule-days">{m.every_day ? "Every day" : m.days.join(" ")}</td>
+              <td class="schedule-portion">{m.cups != null ? fmtCups(m.cups) : `${m.portions}×`}</td>
+              <td class="schedule-action">
+                {#if m.meal_number != null}
+                  <button class="chip" class:active={m.paused} disabled={busy}
+                    onclick={() => run("pause-meal", { meal_number: m.meal_number, paused: !m.paused })}>
+                    {m.paused ? "Paused" : "Pause"}
+                  </button>
+                {/if}
+              </td>
+              <td class="schedule-action">
+                {#if m.meal_number != null && !m.paused && !isDispensed(m)}
+                  <button class="chip" class:active={upcomingSkip(m.skip)} disabled={busy}
+                    onclick={() => run("skip-meal", { meal_number: m.meal_number, skip: !upcomingSkip(m.skip) })}>
+                    {upcomingSkip(m.skip) ? `Skip ${fmtSkip(m.skip)} ✕` : "Skip next"}
+                  </button>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
       <div class="schedule-note">Pause holds a meal indefinitely; Skip drops just the next one.</div>
     </div>
   {/if}
 
   {#if error}<div class="robot-error">{error}</div>{/if}
 </div>
-
-<style>
-  .schedule-actions { margin-left: auto; display: inline-flex; gap: 6px; }
-  .schedule-actions .chip { cursor: pointer; }
-  .schedule-actions .chip:disabled { opacity: 0.5; cursor: progress; }
-  .schedule-row.done .schedule-time,
-  .schedule-row.done .schedule-name { text-decoration: line-through; opacity: 0.65; }
-</style>

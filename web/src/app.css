@@ -342,16 +342,22 @@ tbody tr:hover { background: var(--panel-2); }
 .has-tip:hover::after,
 .has-tip:focus-visible::after { opacity: 1; }
 
-/* Read-only feeding schedule. */
+/* Feeding schedule — a lightly-styled table so columns line up across rows. */
 .schedule { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
 .schedule-head { font-size: 0.74rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
-.schedule-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; font-size: 0.84rem; padding: 4px 0; }
-.schedule-row.dim { opacity: 0.5; }
-.schedule-time { font-variant-numeric: tabular-nums; min-width: 66px; font-weight: 600; }
-.schedule-name { flex: 1 1 auto; }
-.schedule-days { color: var(--muted); font-size: 0.76rem; }
-.schedule-portion { color: var(--muted); font-variant-numeric: tabular-nums; }
-.schedule-flag { color: var(--accent-2); font-size: 0.7rem; border: 1px solid rgba(240, 136, 62, 0.4); border-radius: 4px; padding: 0 5px; }
+.schedule-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+.schedule-table td { padding: 4px 0; vertical-align: baseline; }
+.schedule-table td:not(:last-child) { padding-right: 12px; }
+.schedule-table tr.dim { opacity: 0.5; }
+.schedule-table tr.done .schedule-time,
+.schedule-table tr.done .schedule-name { text-decoration: line-through; opacity: 0.65; }
+.schedule-time { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.schedule-name { width: 100%; }
+.schedule-days { color: var(--muted); font-size: 0.76rem; white-space: nowrap; }
+.schedule-portion { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.schedule-action { white-space: nowrap; }
+.schedule-action .chip { cursor: pointer; }
+.schedule-action .chip:disabled { opacity: 0.5; cursor: progress; }
 .schedule-note { color: var(--muted); font-size: 0.72rem; margin-top: 8px; font-style: italic; }
 
 /* Click-to-detail dialog (drilling into a chart's time bucket). Sits above the
