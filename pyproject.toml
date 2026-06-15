@@ -9,3 +9,8 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "uvicorn[standard]>=0.49.0",
 ]
+
+# Use the local pylitterbot checkout (branch feeder-schedule-write) for the
+# feeder schedule write support until it lands upstream.
+[tool.uv.sources]
+pylitterbot = { path = "../pylitterbot", editable = true }

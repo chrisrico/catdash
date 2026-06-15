@@ -420,6 +420,16 @@ async def api_feeder_name(robot_id: str, payload: dict = Body(default={})) -> di
     return await _command(robot_id, "name", payload)
 
 
+@app.post("/api/feeders/{robot_id}/skip-meal", dependencies=[Depends(require_controls)])
+async def api_feeder_skip_meal(robot_id: str, payload: dict = Body(default={})) -> dict:
+    return await _command(robot_id, "skip_meal", payload)
+
+
+@app.post("/api/feeders/{robot_id}/pause-meal", dependencies=[Depends(require_controls)])
+async def api_feeder_pause_meal(robot_id: str, payload: dict = Body(default={})) -> dict:
+    return await _command(robot_id, "pause_meal", payload)
+
+
 @app.get("/")
 async def index():
     if STATIC_DIR is None:

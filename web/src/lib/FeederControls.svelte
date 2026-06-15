@@ -36,6 +36,12 @@
   };
 
   const meals = $derived(robot.schedule?.meals ?? []);
+
+  // Cross off meals actually dispensed today, from the feeder's real feeding
+  // history — the server resolves today's dispensed meal numbers from the
+  // `feeding_meal` records, so a meal that failed to fire is never crossed off.
+  const fedToday = $derived(new Set(robot.fed_meal_numbers ?? []));
+  const isDispensed = (m) => m.meal_number != null && fedToday.has(m.meal_number);
 </script>
 
 <div class="robot" class:offline={!robot.online}>
@@ -115,18 +121,36 @@
         {robot.schedule?.name ? `Feeding schedule · ${robot.schedule.name}` : "Feeding schedule"}
       </div>
       {#each meals as m}
-        <div class="schedule-row" class:dim={m.paused}>
+        <div class="schedule-row" class:dim={m.paused} class:done={isDispensed(m)}>
           <span class="schedule-time">{fmtMealTime(m.hour, m.minute)}</span>
           <span class="schedule-name">{m.name}</span>
           <span class="schedule-days">{m.every_day ? "Every day" : m.days.join(" ")}</span>
           <span class="schedule-portion">{m.cups != null ? fmtCups(m.cups) : `${m.portions}×`}</span>
-          {#if m.paused}<span class="schedule-flag">paused</span>{/if}
-          {#if upcomingSkip(m.skip)}<span class="schedule-flag">skip {fmtSkip(m.skip)}</span>{/if}
+          {#if m.meal_number != null}
+            <span class="schedule-actions">
+              <button class="chip" class:active={m.paused} disabled={busy}
+                onclick={() => run("pause-meal", { meal_number: m.meal_number, paused: !m.paused })}>
+                {m.paused ? "Paused" : "Pause"}
+              </button>
+              <button class="chip" class:active={upcomingSkip(m.skip)} disabled={busy}
+                onclick={() => run("skip-meal", { meal_number: m.meal_number, skip: !upcomingSkip(m.skip) })}>
+                {upcomingSkip(m.skip) ? `Skip ${fmtSkip(m.skip)} ✕` : "Skip next"}
+              </button>
+            </span>
+          {/if}
         </div>
       {/each}
-      <div class="schedule-note">View only — edit meals in the Whisker app for now.</div>
+      <div class="schedule-note">Pause holds a meal indefinitely; Skip drops just the next one.</div>
     </div>
   {/if}
 
   {#if error}<div class="robot-error">{error}</div>{/if}
 </div>
+
+<style>
+  .schedule-actions { margin-left: auto; display: inline-flex; gap: 6px; }
+  .schedule-actions .chip { cursor: pointer; }
+  .schedule-actions .chip:disabled { opacity: 0.5; cursor: progress; }
+  .schedule-row.done .schedule-time,
+  .schedule-row.done .schedule-name { text-decoration: line-through; opacity: 0.65; }
+</style>

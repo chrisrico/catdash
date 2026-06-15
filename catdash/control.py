@@ -17,6 +17,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 from pylitterbot import Account
 from pylitterbot.enums import BrightnessLevel, NightLightMode
@@ -63,14 +64,12 @@ _WEEKDAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def _serialize_schedule(robot: Any) -> dict | None:
-    """Read-only view of the Feeder-Robot's active feeding schedule.
+    """The Feeder-Robot's active feeding schedule.
 
-    pylitterbot fetches the schedule (it computes `next_feeding` from it) but
-    exposes no accessor, so we read it from the raw data via the public
-    to_dict(). Editing/skipping meals isn't supported by the library.
+    Surfaces each meal's `meal_number` so the client can target it for the
+    skip/pause writes exposed by `WhiskerControl`.
     """
-    state = robot.to_dict().get("state") or {}
-    sched = state.get("active_schedule") or {}
+    sched = robot.active_schedule or {}
     raw_meals = sched.get("meals") or []
     insert = robot.meal_insert_size or 0
     meals = []
@@ -87,6 +86,7 @@ def _serialize_schedule(robot: Any) -> dict | None:
         )
         meals.append(
             {
+                "meal_number": meal.get("mealNumber"),
                 "name": meal.get("name"),
                 "hour": meal.get("hour"),
                 "minute": meal.get("minute"),
@@ -100,6 +100,35 @@ def _serialize_schedule(robot: Any) -> dict | None:
         )
     meals.sort(key=lambda m: ((m["hour"] or 0), (m["minute"] or 0)))
     return {"name": sched.get("name"), "meals": meals}
+
+
+def _fed_meal_numbers_today(robot: Any) -> list[int]:
+    """Meal numbers that have actually dispensed today, from the feeder's real
+    feeding history (`feeding_meal` is filtered server-side to dispensed events in
+    the last 24h). Used to cross off meals that have been fed, rather than guessing
+    from the clock — a meal that failed to fire simply won't appear here.
+    """
+    try:
+        tz: ZoneInfo | None = ZoneInfo(robot.timezone)
+    except Exception:  # noqa: BLE001 - missing/invalid tz; fall back to naive local
+        tz = None
+    today = datetime.now(tz).date()
+    fed: set[int] = set()
+    for rec in robot.to_dict().get("feeding_meal") or []:
+        if not isinstance(rec, dict):
+            continue
+        number, ts = rec.get("meal_number"), rec.get("timestamp")
+        if number is None or not ts:
+            continue
+        try:
+            when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if when.tzinfo is not None and tz is not None:
+            when = when.astimezone(tz)
+        if when.date() == today:
+            fed.add(int(number))
+    return sorted(fed)
 
 
 def _serialize_litter_robot(robot: Any, *, firmware_update_available: bool) -> dict:
@@ -167,6 +196,7 @@ def _serialize_feeder(robot: Any) -> dict:
         "power_type": robot.power_type,
         "next_feeding": _iso(robot.next_feeding),
         "schedule": _serialize_schedule(robot),
+        "fed_meal_numbers": _fed_meal_numbers_today(robot),
         "last_feeding": (
             {
                 "timestamp": _iso(last.get("timestamp")),
@@ -226,9 +256,23 @@ async def _run_feeder_command(robot: Any, action: str, value: dict) -> bool:
             return await robot.set_panel_lockout(bool(value["locked"]))
         if action == "name":
             return await robot.set_name(str(value["name"]))
+        if action == "skip_meal":
+            return await robot.skip_meal(
+                int(value["meal_number"]), skip=bool(value.get("skip", True))
+            )
+        if action == "pause_meal":
+            return await robot.pause_meal(
+                int(value["meal_number"]), paused=bool(value.get("paused", True))
+            )
     except (KeyError, ValueError, InvalidCommandException) as exc:
         raise ControlError(str(exc) or type(exc).__name__) from exc
     raise ControlError(f"Unknown feeder action: {action!r}")
+
+
+# Feeder schedule writes update local state optimistically; the Hasura-backed
+# read lags behind the REST write, so a refresh right after would briefly report
+# stale schedule state. Trust the optimistic snapshot for these actions.
+_NO_REFRESH_ACTIONS = {"skip_meal", "pause_meal", "set_schedule", "clear_schedule"}
 
 
 class WhiskerControl:
@@ -427,7 +471,8 @@ class WhiskerControl:
 
             # LR4 commands don't update local state, so pull fresh data to report
             # the real post-command status (the next poll would catch it anyway).
-            if ok:
+            # Feeder schedule writes are the exception — see _NO_REFRESH_ACTIONS.
+            if ok and action not in _NO_REFRESH_ACTIONS:
                 try:
                     await robot.refresh()
                 except Exception:  # noqa: BLE001
