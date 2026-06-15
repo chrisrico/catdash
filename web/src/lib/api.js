@@ -70,6 +70,19 @@ export function bucketStartMs(ms, unit) {
   return day.getTime();
 }
 
+// Round a timestamp to the NEAREST bucket start (vs bucketStartMs, which floors).
+// Bars are centered on their bucket start, so a pointer in a bar's right half —
+// or in the gap just before the next bar — should resolve to the nearer bucket,
+// not floor down a day. Picks whichever of this bucket / the next is closer.
+export function nearestBucketMs(ms, unit) {
+  const lo = bucketStartMs(ms, unit);
+  const next = new Date(lo);
+  if (unit === "month") next.setMonth(next.getMonth() + 1);
+  else next.setDate(next.getDate() + (unit === "week" ? 7 : 1));
+  const hi = next.getTime();
+  return ms - lo <= hi - ms ? lo : hi;
+}
+
 // Group [ms, value] points into buckets and reduce each with `reduce(values[])`.
 export function bucketBy(points, unit, reduce) {
   const groups = new Map();

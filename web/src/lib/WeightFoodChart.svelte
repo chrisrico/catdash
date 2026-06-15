@@ -13,6 +13,7 @@
     bucketUnit,
     bucketBy,
     bucketStartMs,
+    nearestBucketMs,
     fmtBucket,
     fmtLbs,
     fmtCups,
@@ -54,7 +55,7 @@
 
   // --- Click-to-detail: the bucket the user clicked, and its rows ---
   let clickedMs = $state(null);
-  const bucketMs = $derived(clickedMs == null ? null : bucketStartMs(clickedMs, unit));
+  const bucketMs = $derived(clickedMs == null ? null : nearestBucketMs(clickedMs, unit));
 
   const detail = $derived.by(() => {
     if (bucketMs == null) return null;

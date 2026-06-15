@@ -1,8 +1,9 @@
 <script>
   import echarts from "./echarts.js";
 
-  // onBucketClick(ms) fires when the plot area is clicked, with the x-axis time
-  // value (ms) under the cursor — the parent floors it to a bucket and drills in.
+  // onBucketClick(ms) fires when the plot area is acted on, with the x-axis time
+  // value (ms) under the pointer — the parent snaps it to the nearest bucket and
+  // drills in.
   let { option, onBucketClick } = $props();
 
   let el;
@@ -15,9 +16,11 @@
   $effect(() => {
     chart = echarts.init(el);
 
-    // Map a plot pixel to its x-axis time value and drill in. Only counts
-    // points inside the plotting grid (true even for whitespace above a short
-    // bar).
+    // Map a plot pixel to its x-axis time value and drill in. Only counts points
+    // inside the plotting grid (true even for whitespace above a short bar). The
+    // parent rounds the value to the nearest bucket — bars are centered on their
+    // bucket start, so flooring a raw pixel lands a bucket early in a bar's left
+    // half, which at a few-pixel-wide daily bar is well within a fingertip.
     const fire = (x, y) => {
       if (!onBucketClick) return;
       if (x == null || !chart.containPixel("grid", [x, y])) return;
@@ -35,9 +38,9 @@
 
     const zr = chart.getZr();
     // Touch: tapping a thin bar is imprecise, but dragging moves the axis
-    // pointer ("the selector") to a target time. So on a coarse pointer, open
-    // the detail on drag-end using the last finger position (a plain tap moves
-    // nothing, so it still opens at the tap spot). Mouse stays click-to-open.
+    // pointer ("the selector") to a target bucket. So on a coarse pointer, open
+    // the detail on drag-end using the last finger position. Mouse stays
+    // click-to-open.
     if (window.matchMedia?.("(pointer: coarse)").matches) {
       let x = null;
       let y = null;

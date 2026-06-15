@@ -11,6 +11,7 @@
     bucketBy,
     sum,
     bucketStartMs,
+    nearestBucketMs,
     fmtBucket,
     fmtLbs,
     fmtDateTime,
@@ -77,7 +78,7 @@
 
   // --- Click-to-detail: the clicked bucket and the visits/durations within it ---
   let clickedMs = $state(null);
-  const clickedBucket = $derived(clickedMs == null ? null : bucketStartMs(clickedMs, unit));
+  const clickedBucket = $derived(clickedMs == null ? null : nearestBucketMs(clickedMs, unit));
 
   const MATCH_WINDOW = 30 * 60 * 1000; // weigh-in → its clean cycle, in ms
 
