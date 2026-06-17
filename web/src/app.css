@@ -360,6 +360,33 @@ tbody tr:hover { background: var(--panel-2); }
 .schedule-action .chip:disabled { opacity: 0.5; cursor: progress; }
 .schedule-note { color: var(--muted); font-size: 0.72rem; margin-top: 8px; font-style: italic; }
 
+/* Narrow viewports: the 6-column table is wider than the card, so the action
+   chips clip off the right edge. Below ~560px collapse each meal into a stacked
+   card — time/name/meta on the first rows, the Pause/Skip chips wrapping on
+   their own line — so nothing overflows. Table semantics stay; only display
+   changes. */
+@media (max-width: 560px) {
+  .schedule-table, .schedule-table tbody, .schedule-table tr, .schedule-table td {
+    display: block;
+  }
+  .schedule-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .schedule-table tr:last-child { border-bottom: none; }
+  .schedule-table td { padding: 1px 0; }
+  .schedule-table td:not(:last-child) { padding-right: 0; }
+  .schedule-time { display: inline-block; }
+  /* name sits next to the time */
+  .schedule-name { display: inline-block; width: auto; margin-left: 8px; font-weight: 600; }
+  .schedule-days::before { content: ""; }
+  .schedule-days, .schedule-portion { display: inline-block; }
+  .schedule-portion::before { content: "· "; }
+  /* both action chips share one row, wrapping if needed */
+  .schedule-action { display: inline-block; margin-top: 6px; margin-right: 8px; }
+  .schedule-action .chip { min-height: 32px; }
+}
+
 /* Click-to-detail dialog (drilling into a chart's time bucket). Sits above the
    .has-tip tooltip (z-index 20) and the ECharts value box, whose DOM carries an
    inline z-index: 9999999 — so on touch, a tooltip revived as the modal opens

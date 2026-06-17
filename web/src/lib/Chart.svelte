@@ -41,16 +41,34 @@
     // pointer ("the selector") to a target bucket. So on a coarse pointer, open
     // the detail on drag-end using the last finger position. Mouse stays
     // click-to-open.
+    //
+    // We read the finger position from the *native* touch events on the canvas,
+    // not from zrender's mousedown/move/up. zrender reports e.offsetX relative
+    // to whatever display element is under the pointer (a bar), so on drag-end
+    // over an empty day — or over a day whose neighbor has a bar — the offset
+    // snaps back to the originating bar's column and the wrong (or empty) bucket
+    // opens. clientX minus the canvas rect is always canvas-relative regardless
+    // of what's painted underneath, so empty days convert correctly.
+    let onTouchEnd = null;
     if (window.matchMedia?.("(pointer: coarse)").matches) {
       let x = null;
       let y = null;
       const track = (e) => {
-        x = e.offsetX;
-        y = e.offsetY;
+        const t = e.touches?.[0] ?? e.changedTouches?.[0];
+        if (!t) return;
+        const r = el.getBoundingClientRect();
+        x = t.clientX - r.left;
+        y = t.clientY - r.top;
       };
-      zr.on("mousedown", track);
-      zr.on("mousemove", track);
-      zr.on("mouseup", () => fire(x, y));
+      onTouchEnd = (e) => {
+        track(e);
+        fire(x, y);
+      };
+      el.addEventListener("touchstart", track, { passive: true });
+      el.addEventListener("touchmove", track, { passive: true });
+      el.addEventListener("touchend", onTouchEnd, { passive: true });
+      // store track so cleanup can remove the move/start listeners too
+      el._cdTrack = track;
     } else {
       zr.on("click", (e) => fire(e.offsetX, e.offsetY));
     }
@@ -59,6 +77,12 @@
     ro.observe(el);
     return () => {
       ro.disconnect();
+      if (el._cdTrack) {
+        el.removeEventListener("touchstart", el._cdTrack);
+        el.removeEventListener("touchmove", el._cdTrack);
+        el.removeEventListener("touchend", onTouchEnd);
+        delete el._cdTrack;
+      }
       chart?.dispose(); // also tears down the zr click handler
       chart = null;
     };
