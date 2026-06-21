@@ -102,6 +102,10 @@ async def lifespan(app: FastAPI):
         os._exit(1)
     logger.info("DB ready at %s", settings.db_path)
 
+    # Let the live stream pull today's activity in as it happens: a completed
+    # clean cycle / new feeding over the websocket debounces a collection.
+    control.set_collection_trigger(run_collection)
+
     # Kick off an immediate collection, then run on the configured interval.
     asyncio.create_task(run_collection())
     scheduler.add_job(

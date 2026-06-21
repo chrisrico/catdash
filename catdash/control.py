@@ -28,6 +28,18 @@ from .config import get_settings
 
 logger = logging.getLogger("control")
 
+# When a live websocket update implies new activity-history rows — a Litter-Robot
+# finished a clean cycle, a Feeder dispensed a meal — pull them in soon instead of
+# waiting for the next scheduled collection. That's what fills in "today" while a
+# dashboard is open. A single cycle emits a burst of updates, so the collection is
+# debounced to the trailing edge and floored so a busy box can't collect on every
+# visit.
+_STREAM_COLLECT_DEBOUNCE = 45.0  # seconds of quiet after the last signal
+_STREAM_COLLECT_MIN_GAP = 120.0  # minimum seconds between stream-triggered runs
+
+# Distinguishes "no signal recorded yet" from a real (possibly falsy) signal.
+_UNSET = object()
+
 
 class RobotNotFound(Exception):
     """No robot on the account matches the requested id (maps to HTTP 404)."""
@@ -289,6 +301,15 @@ class WhiskerControl:
         # has_firmware_update() is an extra network call we only make in
         # list_robots; cache it so streamed snapshots can reuse the value.
         self._fw_cache: dict[str, bool] = {}
+        # Stream-triggered collection (see _maybe_trigger_collection). main injects
+        # run_collection via set_collection_trigger to avoid a control<-main import
+        # cycle. We remember each robot's last "new activity" signal and debounce a
+        # collection when it changes.
+        self._collection_trigger: Callable[[], Awaitable[Any]] | None = None
+        self._collect_signals: dict[str, Any] = {}
+        self._collect_task: asyncio.Task | None = None
+        self._collect_due: float = 0.0
+        self._collect_last_run: float = 0.0
 
     async def _connect(self) -> Account:
         settings = get_settings()
@@ -310,6 +331,12 @@ class WhiskerControl:
         return self._account
 
     async def _reset(self) -> None:
+        # Drop any pending stream-triggered collection; signals re-baseline on
+        # reconnect so the first post-reconnect snapshot doesn't trigger one.
+        if self._collect_task is not None and not self._collect_task.done():
+            self._collect_task.cancel()
+        self._collect_task = None
+        self._collect_signals.clear()
         for unsub in self._update_unsubs:
             try:
                 unsub()
@@ -406,8 +433,66 @@ class WhiskerControl:
             snapshot = self._snapshot_robot(robot)
             if snapshot is not None:
                 self._broadcast(snapshot)
+                self._maybe_trigger_collection(snapshot)
 
         return _on_update
+
+    def set_collection_trigger(self, trigger: Callable[[], Awaitable[Any]]) -> None:
+        """Register the coroutine that runs one collection. Injected by main at
+        startup to avoid a control<-main import cycle; live updates that imply new
+        activity history call it (debounced)."""
+        self._collection_trigger = trigger
+
+    @staticmethod
+    def _collection_signal(snapshot: dict) -> Any:
+        """The value that, when it changes, means the activity history has new rows
+        worth collecting — None for robots/states we don't track."""
+        if snapshot.get("kind") == "litter_robot":
+            return snapshot.get("cycle_count")  # increments when a clean cycle completes
+        if snapshot.get("kind") == "feeder":
+            return (snapshot.get("last_feeding") or {}).get("timestamp")  # new meal/snack
+        return None
+
+    def _maybe_trigger_collection(self, snapshot: dict) -> None:
+        """On a meaningful change for a robot, debounce a collection so today's
+        activity lands without waiting for the scheduled run."""
+        signal = self._collection_signal(snapshot)
+        if signal is None:
+            return
+        prev = self._collect_signals.get(snapshot["id"], _UNSET)
+        self._collect_signals[snapshot["id"]] = signal
+        # Skip the first snapshot per robot (just a baseline) and no-op repeats.
+        if prev is not _UNSET and signal != prev:
+            self._request_collection()
+
+    def _request_collection(self) -> None:
+        """(Re)arm the trailing-edge debounce; a burst of updates collapses into
+        one run once they go quiet."""
+        if self._collection_trigger is None:
+            return
+        self._collect_due = asyncio.get_running_loop().time() + _STREAM_COLLECT_DEBOUNCE
+        if self._collect_task is None or self._collect_task.done():
+            self._collect_task = asyncio.create_task(self._collect_after_debounce())
+
+    async def _collect_after_debounce(self) -> None:
+        """Wait until updates go quiet AND the rate floor has passed, then run one
+        collection. run_collection itself no-ops if one is already in flight."""
+        loop = asyncio.get_running_loop()
+        while True:
+            now = loop.time()
+            wait = max(
+                self._collect_due - now,
+                self._collect_last_run + _STREAM_COLLECT_MIN_GAP - now,
+            )
+            if wait <= 0:
+                break
+            await asyncio.sleep(wait)
+        self._collect_last_run = loop.time()
+        try:
+            assert self._collection_trigger is not None
+            await self._collection_trigger()
+        except Exception:  # noqa: BLE001 - a trigger failure must not kill streaming
+            logger.exception("stream-triggered collection failed")
 
     async def _ensure_streaming(self) -> None:
         """Open the per-robot WebSocket subscriptions once, lazily."""
