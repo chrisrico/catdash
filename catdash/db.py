@@ -11,8 +11,10 @@ Tables:
   - daily_usage      : authoritative daily clean-cycle counts (from get_insight).
   - feedings         : Feeder-Robot meal/snack events (timestamp, cups, name).
   - food_level       : Feeder-Robot hopper level snapshots over time.
-  - wait_time        : Litter-Robot clean-cycle wait-time snapshots (on change),
-                       so each visit's duration can be derived going forward.
+  - wait_time        : Litter-Robot clean-cycle wait-time (delay) over time —
+                       known history seeded at init (see _wait_time_history) plus
+                       live snapshots on change (record_wait_time), so each
+                       visit's duration is scored against the delay then in effect.
 
 Timestamps are stored as ISO-8601 UTC strings, which sort and range-compare
 lexicographically. All writes are idempotent (INSERT OR IGNORE / upsert) so
@@ -162,6 +164,7 @@ def init_db() -> None:
     try:
         with connect() as conn:
             conn.executescript(SCHEMA)
+            _seed_wait_time_history(conn)
     except sqlite3.OperationalError as exc:
         # Fallback for unwritability the os.access() precheck can't see —
         # e.g. Synology ACLs that deny writes despite permissive mode bits.
@@ -174,6 +177,31 @@ def _count_new(conn: sqlite3.Connection, fn) -> int:
     before = conn.total_changes
     fn()
     return conn.total_changes - before
+
+
+# Known clean-cycle wait-time (delay) history, seeded so each visit's time-in-box
+# is scored against the delay that was actually in effect. The robot API only
+# reports the *current* wait time, and we didn't start snapshotting it (see
+# record_wait_time) until after the 2026-06-14 change from 7 -> 15 min — so
+# neither the long 7-min era nor the change itself was ever recorded, and every
+# post-6/14 visit came out 8 min too long (scored against the inferred 7). These
+# two rows fill the gap: 7 min "since the beginning" (epoch) and 15 min from the
+# day it changed (local midnight of 2026-06-14). Add a row here whenever the delay
+# changes again — though going forward record_wait_time captures changes live.
+def _wait_time_history() -> list[tuple[str, int]]:
+    changed = datetime(2026, 6, 14).astimezone(timezone.utc).isoformat()
+    return [("1970-01-01T00:00:00+00:00", 7), (changed, 15)]
+
+
+def _seed_wait_time_history(conn: sqlite3.Connection) -> None:
+    """Idempotently seed the known wait-time history (see _wait_time_history()).
+    INSERT OR IGNORE on the timestamp PK makes this safe to run on every startup
+    and never clobbers a live snapshot recorded by record_wait_time()."""
+    now = _now()
+    conn.executemany(
+        "INSERT OR IGNORE INTO wait_time (timestamp, minutes, inserted_at) VALUES (?, ?, ?)",
+        [(ts, minutes, now) for ts, minutes in _wait_time_history()],
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -562,11 +590,12 @@ def get_visit_durations(
     if not pairs:
         return {"count": 0, "median_sec": None, "mean_sec": None}
 
-    # Infer the wait time for visits older than any recorded snapshot. Each gap is
+    # Backstop for visits older than any wait_time row: the known history is
+    # seeded back to epoch (see _wait_time_history), so this normally finds a
+    # snapshot for every visit. If one is somehow missing, infer it — each gap is
     # wait + duration, so the wait is the largest valid setting that fits under it;
-    # take the mode of that across the pre-snapshot visits (robust to the odd
-    # bad pairing, and assumes the setting was constant before we started
-    # recording — true here: it was 7 until the day recording began).
+    # take the mode of that across the pre-snapshot visits (robust to the odd bad
+    # pairing, assuming the setting was constant before the earliest snapshot).
     def _snapped_wait(gap: float) -> int:
         fits = [m for m in _VALID_WAIT_TIMES if m * 60 <= gap]
         return fits[-1] if fits else _VALID_WAIT_TIMES[0]
