@@ -1,23 +1,18 @@
 services:
   dashboard:
     image: ghcr.io/chrisrico/catdash:latest
-    container_name: catdash
+    container_name: catdash          # ts-ingress proxies to http://catdash:8080
     restart: unless-stopped
-    # Run as the host user who owns your data folder (values from `id -u` /
-    # `id -g`), so the DB is written with ownership you already manage.
-    # Unset, it falls back to the image's built-in non-root user (1000:1000).
+    # Run as the host user who owns your data folder (`id -u` / `id -g`).
     user: "${PUID:-1000}:${PGID:-1000}"
     env_file: .env
     environment:
       DB_PATH: /data/catdash.db
       COLLECT_INTERVAL_HOURS: ${COLLECT_INTERVAL_HOURS:-6}
-    ports:
-      - "${PORT:-8080}:8080"
+    networks:
+      - ts-shared
     volumes:
-      # Defaults to a Docker-managed named volume. Set DATA_DIR=/path/on/host in
-      # .env to store the SQLite DB in a host folder instead (easy to back up).
       - ${DATA_DIR:-catdash_data}:/data
-      # Follow the host's timezone (log timestamps). Read-only; override via TZ in .env.
       - /etc/localtime:/etc/localtime:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz').status==200 else 1)"]
@@ -26,7 +21,11 @@ services:
       retries: 3
       start_period: 20s
 
+networks:
+  # Same external network media-stack's ts-ingress joins. Created once with
+  # `docker network create ts-shared`.
+  ts-shared:
+    external: true
+
 volumes:
-  # Used only when DATA_DIR is unset (the default). A host path in DATA_DIR
-  # bypasses this and bind-mounts your folder directly.
   catdash_data:
