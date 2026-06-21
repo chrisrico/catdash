@@ -55,6 +55,17 @@ class BuildScheduleMealsTest(unittest.TestCase):
         self.assertEqual(new["skip"], control._NO_SKIP)
         self.assertEqual(new["days"], ["Sat", "Sun"])
 
+    def test_paused_is_editable_but_preserved_when_omitted(self):
+        out = _build_schedule_meals(RAW, [
+            # meal 1 sends paused -> applied; meal 2 omits it -> keeps base (True)
+            {"meal_number": 1, "name": "Breakfast", "hour": 8, "minute": 0,
+             "days": ["Mon"], "portions": 1, "paused": True},
+            {"meal_number": 2, "name": "Lunch", "hour": 13, "minute": 0,
+             "days": ["Mon"], "portions": 1},
+        ])
+        self.assertTrue(out[0]["paused"])   # set by the editor
+        self.assertTrue(out[1]["paused"])   # preserved from the raw meal
+
     def test_duplicate_meal_number_does_not_clone_identity(self):
         # A second item claiming meal_number 1 must not reuse meal 1's id; it
         # becomes a fresh meal with a minted number instead.

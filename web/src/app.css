@@ -356,9 +356,13 @@ tbody tr:hover { background: var(--panel-2); }
 .schedule-table tr.done .schedule-name { text-decoration: line-through; opacity: 0.65; }
 .schedule-time { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
 .schedule-name { width: 100%; }
-.schedule-action { white-space: nowrap; }
+.schedule-days { color: var(--muted); font-size: 0.76rem; white-space: nowrap; }
+.schedule-portion { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.schedule-action { white-space: nowrap; text-align: center; }
 .schedule-action .chip { cursor: pointer; }
 .schedule-action .chip:disabled { opacity: 0.5; cursor: progress; }
+/* Paused is shown as a quiet label, not an interactive pill (pause lives in Edit). */
+.schedule-paused { color: var(--muted); font-size: 0.76rem; font-style: italic; }
 .schedule-note { color: var(--muted); font-size: 0.72rem; margin-top: 8px; font-style: italic; }
 
 /* Feeding-schedule editor (modal). One block per meal: name/time/portions on the
@@ -379,8 +383,10 @@ tbody tr:hover { background: var(--panel-2); }
 .sched-edit-remove { margin-left: auto; width: 28px; height: 28px; border-radius: 8px;
   border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; }
 .sched-edit-remove:hover { color: var(--bad); border-color: var(--bad); }
-.sched-edit-days { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sched-edit-days { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .sched-edit-days .chip { cursor: pointer; }
+/* The pause toggle sits apart from the day chips, pushed to the row's end. */
+.sched-edit-pause { margin-left: auto; }
 .sched-edit-add { align-self: flex-start; }
 .sched-edit-error { color: var(--bad); font-size: 0.82rem; }
 .sched-edit-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }

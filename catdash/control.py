@@ -307,6 +307,10 @@ def _build_meal(item: dict, raw_by_number: dict[int, dict]) -> dict:
     meal["minute"] = _meal_int(item.get("minute"), 0, 59, "minute")
     meal["portions"] = _meal_int(item.get("portions"), 1, _MAX_PORTIONS, "portions")
     meal["days"] = _meal_days(item.get("days"))
+    # Pause is edited here (the read-only view only exposes skip); when the client
+    # omits it, keep the meal's current paused state.
+    if "paused" in item:
+        meal["paused"] = bool(item["paused"])
     return meal
 
 

@@ -27,12 +27,13 @@
       time: `${pad2(m.hour ?? 0)}:${pad2(m.minute ?? 0)}`,
       portions: m.portions ?? 1,
       days: [...(m.days ?? [])],
+      paused: !!m.paused,
     }));
     editing = true;
   }
 
   const addMeal = () =>
-    (draft = [...draft, { key: keySeq++, meal_number: null, name: "Meal", time: "12:00", portions: 1, days: [...DAYS] }]);
+    (draft = [...draft, { key: keySeq++, meal_number: null, name: "Meal", time: "12:00", portions: 1, days: [...DAYS], paused: false }]);
   const removeMeal = (key) => (draft = draft.filter((d) => d.key !== key));
   const toggleDay = (d, day) =>
     (d.days = d.days.includes(day) ? d.days.filter((x) => x !== day) : [...d.days, day]);
@@ -48,7 +49,7 @@
     }
     const mealsPayload = draft.map((d) => {
       const [hour, minute] = d.time.split(":").map(Number);
-      return { meal_number: d.meal_number, name: d.name.trim(), hour, minute, portions: Number(d.portions), days: d.days };
+      return { meal_number: d.meal_number, name: d.name.trim(), hour, minute, portions: Number(d.portions), days: d.days, paused: d.paused };
     });
     saving = true;
     editError = null;
@@ -182,16 +183,12 @@
             <tr class:dim={m.paused} class:done={isDispensed(m)}>
               <td class="schedule-time">{fmtMealTime(m.hour, m.minute)}</td>
               <td class="schedule-name">{m.name}</td>
+              <td class="schedule-days">{m.every_day ? "Every day" : m.days.join(" ")}</td>
+              <td class="schedule-portion">{m.cups != null ? fmtCups(m.cups) : `${m.portions}×`}</td>
               <td class="schedule-action">
-                {#if m.meal_number != null}
-                  <button class="chip" class:active={m.paused} disabled={busy}
-                    onclick={() => run("pause-meal", { meal_number: m.meal_number, paused: !m.paused })}>
-                    {m.paused ? "Paused" : "Pause"}
-                  </button>
-                {/if}
-              </td>
-              <td class="schedule-action">
-                {#if m.meal_number != null && !m.paused && !isDispensed(m)}
+                {#if m.paused}
+                  <span class="schedule-paused">Paused</span>
+                {:else if m.meal_number != null && !isDispensed(m)}
                   <button class="chip" class:active={upcomingSkip(m.skip)} disabled={busy}
                     onclick={() => run("skip-meal", { meal_number: m.meal_number, skip: !upcomingSkip(m.skip) })}>
                     {upcomingSkip(m.skip) ? `Skip ${fmtSkip(m.skip)} ✕` : "Skip next"}
@@ -202,7 +199,7 @@
           {/each}
         </tbody>
       </table>
-      <div class="schedule-note">Pause holds a meal indefinitely; Skip drops just the next one.</div>
+      <div class="schedule-note">Skip drops just the next one; pausing and other edits live in Edit.</div>
     </div>
   {/if}
 
@@ -233,6 +230,8 @@
               <button type="button" class="chip" class:active={d.days.includes(day)}
                 onclick={() => toggleDay(d, day)}>{day}</button>
             {/each}
+            <button type="button" class="chip sched-edit-pause" class:active={d.paused}
+              onclick={() => (d.paused = !d.paused)}>{d.paused ? "Paused" : "Pause"}</button>
           </div>
         </div>
       {/each}
