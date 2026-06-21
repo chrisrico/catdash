@@ -434,6 +434,12 @@ async def api_feeder_pause_meal(robot_id: str, payload: dict = Body(default={}))
     return await _command(robot_id, "pause_meal", payload)
 
 
+@app.post("/api/feeders/{robot_id}/schedule", dependencies=[Depends(require_controls)])
+async def api_feeder_schedule(robot_id: str, payload: dict = Body(default={})) -> dict:
+    """Replace the feeder's schedule with the client's edited meal list."""
+    return await _command(robot_id, "set_schedule", payload)
+
+
 @app.get("/")
 async def index():
     if STATIC_DIR is None:

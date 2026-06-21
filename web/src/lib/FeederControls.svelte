@@ -2,8 +2,61 @@
   // One Feeder-Robot: live status + remote control. Same contract as
   // LitterRobotControls — `robot` snapshot, `run(path, body)` command callback.
   import { fmtCups, fmtDateTime } from "./api.js";
+  import Modal from "./Modal.svelte";
 
   let { robot, busy = false, error = null, run } = $props();
+
+  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const pad2 = (n) => String(n).padStart(2, "0");
+
+  // --- Schedule editor (modal) ---
+  // draft holds an editable copy of the meals; Save merges it server-side onto
+  // the real schedule (preserving each meal's id/pause/skip) via set_schedule.
+  let editing = $state(false);
+  let draft = $state([]);
+  let saving = $state(false);
+  let editError = $state(null);
+  let keySeq = 0;
+
+  function openEditor() {
+    editError = null;
+    draft = meals.map((m) => ({
+      key: keySeq++,
+      meal_number: m.meal_number,
+      name: m.name ?? "",
+      time: `${pad2(m.hour ?? 0)}:${pad2(m.minute ?? 0)}`,
+      portions: m.portions ?? 1,
+      days: [...(m.days ?? [])],
+    }));
+    editing = true;
+  }
+
+  const addMeal = () =>
+    (draft = [...draft, { key: keySeq++, meal_number: null, name: "Meal", time: "12:00", portions: 1, days: [...DAYS] }]);
+  const removeMeal = (key) => (draft = draft.filter((d) => d.key !== key));
+  const toggleDay = (d, day) =>
+    (d.days = d.days.includes(day) ? d.days.filter((x) => x !== day) : [...d.days, day]);
+  const draftCups = (p) => (robot.meal_insert_size ? fmtCups(p * robot.meal_insert_size) : `${p}×`);
+
+  async function saveSchedule() {
+    if (!draft.length)
+      return (editError = "Keep at least one meal — pause one instead of removing them all.");
+    for (const d of draft) {
+      if (!d.name.trim()) return (editError = "Every meal needs a name.");
+      if (!/^\d{1,2}:\d{2}/.test(d.time)) return (editError = "Every meal needs a time.");
+      if (!d.days.length) return (editError = "Every meal needs at least one day.");
+    }
+    const mealsPayload = draft.map((d) => {
+      const [hour, minute] = d.time.split(":").map(Number);
+      return { meal_number: d.meal_number, name: d.name.trim(), hour, minute, portions: Number(d.portions), days: d.days };
+    });
+    saving = true;
+    editError = null;
+    const res = await run("schedule", { meals: mealsPayload });
+    saving = false;
+    if (res && res.ok) editing = false;
+    else editError = "The feeder didn't accept the schedule — it may be offline. Try again.";
+  }
 
   const cupsLabel = (c) => (c === 0.25 ? "¼ cup" : c === 0.125 ? "⅛ cup" : `${c} cup`);
   const fillClass = (pct) => (pct <= 10 ? "bad" : pct <= 30 ? "warn" : "");
@@ -118,7 +171,10 @@
   {#if meals.length}
     <div class="schedule">
       <div class="schedule-head">
-        {robot.schedule?.name ? `Feeding schedule · ${robot.schedule.name}` : "Feeding schedule"}
+        <span class="schedule-head-label">
+          {robot.schedule?.name ? `Feeding schedule · ${robot.schedule.name}` : "Feeding schedule"}
+        </span>
+        <button class="btn sm secondary" disabled={busy} onclick={openEditor}>Edit</button>
       </div>
       <table class="schedule-table">
         <tbody>
@@ -126,8 +182,6 @@
             <tr class:dim={m.paused} class:done={isDispensed(m)}>
               <td class="schedule-time">{fmtMealTime(m.hour, m.minute)}</td>
               <td class="schedule-name">{m.name}</td>
-              <td class="schedule-days">{m.every_day ? "Every day" : m.days.join(" ")}</td>
-              <td class="schedule-portion">{m.cups != null ? fmtCups(m.cups) : `${m.portions}×`}</td>
               <td class="schedule-action">
                 {#if m.meal_number != null}
                   <button class="chip" class:active={m.paused} disabled={busy}
@@ -154,3 +208,43 @@
 
   {#if error}<div class="robot-error">{error}</div>{/if}
 </div>
+
+{#if editing}
+  <Modal title="Edit feeding schedule" onClose={() => (editing = false)}>
+    <div class="sched-edit">
+      {#each draft as d (d.key)}
+        <div class="sched-edit-meal">
+          <div class="sched-edit-row">
+            <input class="sched-edit-name" type="text" bind:value={d.name} placeholder="Meal name" maxlength="64" />
+            <input class="sched-edit-time" type="time" bind:value={d.time} />
+            <span class="sched-edit-portions">
+              <button type="button" aria-label="Fewer portions" disabled={d.portions <= 1}
+                onclick={() => (d.portions = Math.max(1, d.portions - 1))}>−</button>
+              <b>{d.portions}×</b>
+              <button type="button" aria-label="More portions" disabled={d.portions >= 16}
+                onclick={() => (d.portions = Math.min(16, d.portions + 1))}>+</button>
+              <span class="sched-edit-cups">≈ {draftCups(d.portions)}</span>
+            </span>
+            <button class="sched-edit-remove" title="Remove meal" aria-label="Remove meal"
+              onclick={() => removeMeal(d.key)}>✕</button>
+          </div>
+          <div class="sched-edit-days">
+            {#each DAYS as day}
+              <button type="button" class="chip" class:active={d.days.includes(day)}
+                onclick={() => toggleDay(d, day)}>{day}</button>
+            {/each}
+          </div>
+        </div>
+      {/each}
+
+      <button class="btn sm secondary sched-edit-add" onclick={addMeal}>+ Add meal</button>
+
+      {#if editError}<div class="sched-edit-error">{editError}</div>{/if}
+
+      <div class="sched-edit-actions">
+        <button class="btn secondary" disabled={saving} onclick={() => (editing = false)}>Cancel</button>
+        <button class="btn" disabled={saving} onclick={saveSchedule}>{saving ? "Saving…" : "Save schedule"}</button>
+      </div>
+    </div>
+  </Modal>
+{/if}

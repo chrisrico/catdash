@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from copy import deepcopy
 from datetime import datetime
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from pylitterbot import Account
@@ -73,6 +75,12 @@ def _iso(value: datetime | None) -> str | None:
 
 # Mon-first ordering for displaying a meal's repeat days consistently.
 _WEEKDAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+# The sentinel date the feeder API stores in a meal's `skip` when it's not
+# skipped (a year-0000 timestamp); a new meal starts un-skipped.
+_NO_SKIP = "0000-01-01T00:00:00.000"
+# Guard against a fat-fingered overfeed; the app's own cap is in this ballpark.
+_MAX_PORTIONS = 16
 
 
 def _serialize_schedule(robot: Any) -> dict | None:
@@ -253,6 +261,87 @@ async def _run_litter_command(robot: Any, action: str, value: dict) -> bool:
     raise ControlError(f"Unknown litter-robot action: {action!r}")
 
 
+def _meal_int(value: Any, lo: int, hi: int, field: str) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ControlError(f"meal {field} must be a whole number") from None
+    if not lo <= n <= hi:
+        raise ControlError(f"meal {field} must be between {lo} and {hi}")
+    return n
+
+
+def _meal_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise ControlError("each meal needs a name")
+    return name[:64]
+
+
+def _meal_days(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise ControlError("meal days must be a list")
+    days = [d for d in _WEEKDAY_ORDER if d in value]
+    if not days:
+        raise ControlError("each meal needs at least one day")
+    return days
+
+
+def _build_meal(item: dict, raw_by_number: dict[int, dict]) -> dict:
+    """Turn one client meal into the raw API shape. An existing meal (matched by
+    meal_number) keeps its id/scheduleId/paused/skip and only its editable fields
+    change; a new meal (no/unknown number) gets fresh defaults and its number is
+    minted by the caller."""
+    number = item.get("meal_number")
+    # pop, not get: a matched meal is consumed so a duplicate meal_number in the
+    # request can't clone an existing meal's id (which would corrupt the write).
+    base = raw_by_number.pop(number, None) if isinstance(number, int) else None
+    meal = (
+        deepcopy(base)
+        if base is not None
+        else {"id": str(uuid4()), "scheduleId": None, "paused": False,
+              "skip": _NO_SKIP, "mealNumber": None}
+    )
+    meal["name"] = _meal_name(item.get("name"))
+    meal["hour"] = _meal_int(item.get("hour"), 0, 23, "hour")
+    meal["minute"] = _meal_int(item.get("minute"), 0, 59, "minute")
+    meal["portions"] = _meal_int(item.get("portions"), 1, _MAX_PORTIONS, "portions")
+    meal["days"] = _meal_days(item.get("days"))
+    return meal
+
+
+def _build_schedule_meals(raw_meals: list[dict], desired: list[Any]) -> list[dict]:
+    """Merge the client's desired meal list onto the current raw meals, producing
+    the full replacement list for FeederRobot.set_schedule. Meals absent from
+    `desired` are dropped; new meals get a mealNumber above the current max."""
+    raw_by_number = {
+        m["mealNumber"]: m
+        for m in raw_meals
+        if isinstance(m, dict) and isinstance(m.get("mealNumber"), int)
+    }
+    next_number = (max(raw_by_number) + 1) if raw_by_number else 1
+    out: list[dict] = []
+    for item in desired:
+        if not isinstance(item, dict):
+            raise ControlError("each meal must be an object")
+        meal = _build_meal(item, raw_by_number)
+        if meal["mealNumber"] is None:
+            meal["mealNumber"] = next_number
+            next_number += 1
+        out.append(meal)
+    if not out:
+        raise ControlError("a schedule must keep at least one meal")
+    return out
+
+
+async def _set_feeder_schedule(robot: Any, value: dict) -> bool:
+    desired = value.get("meals")
+    if not isinstance(desired, list):
+        raise ControlError("meals must be a list")
+    raw = (robot.active_schedule or {}).get("meals") or []
+    return await robot.set_schedule(_build_schedule_meals(raw, desired))
+
+
 async def _run_feeder_command(robot: Any, action: str, value: dict) -> bool:
     """Dispatch a control action to a Feeder-Robot."""
     try:
@@ -276,6 +365,8 @@ async def _run_feeder_command(robot: Any, action: str, value: dict) -> bool:
             return await robot.pause_meal(
                 int(value["meal_number"]), paused=bool(value.get("paused", True))
             )
+        if action == "set_schedule":
+            return await _set_feeder_schedule(robot, value)
     except (KeyError, ValueError, InvalidCommandException) as exc:
         raise ControlError(str(exc) or type(exc).__name__) from exc
     raise ControlError(f"Unknown feeder action: {action!r}")

@@ -77,9 +77,11 @@
         }
         // Settings the unit reflects with a lag (panel lock, hopper) will arrive
         // as a live push shortly; nothing else to do.
+        return result; // { ok, robot } — callers that need to react can await it
       } catch (err) {
         console.error(`[catdash] command ${path} failed:`, err);
         errors = { ...errors, [robot.id]: err.message };
+        return undefined; // signals failure to awaiting callers
       } finally {
         busy = { ...busy, [robot.id]: false };
       }
