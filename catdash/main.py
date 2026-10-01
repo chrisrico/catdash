@@ -13,7 +13,7 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import json
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -22,7 +22,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import db, push, watchdog
 from .collector import collect
 from .config import get_settings
 from .control import ControlError, ControlUnavailable, RobotNotFound, control
@@ -35,6 +35,10 @@ logger = logging.getLogger("app")
 
 BASE_DIR = Path(__file__).parent
 scheduler = AsyncIOScheduler()
+
+# The stuck-robot watchdog (watchdog.py), built at startup when controls are on
+# and STUCK_WATCHDOG isn't false; None otherwise (and /api/watchdog says so).
+stuck_watchdog: watchdog.Watchdog | None = None
 
 # In-process collection state. Collection takes several seconds — too long to
 # hold an HTTP response open — so the manual trigger starts it in the background
@@ -116,6 +120,24 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    global stuck_watchdog
+    if settings.controls_enabled and settings.watchdog_enabled and settings.has_credentials:
+        stuck_watchdog = watchdog.build_from_settings(control)
+        scheduler.add_job(
+            stuck_watchdog.tick,
+            "interval",
+            minutes=settings.watchdog_poll_minutes,
+            id="watchdog",
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info(
+            "Stuck-robot watchdog on: polling every %dm, reset after %dm in use, "
+            "notify %dm after that",
+            settings.watchdog_poll_minutes,
+            settings.watchdog_reset_after_minutes,
+            settings.watchdog_notify_after_minutes,
+        )
     scheduler.start()
     logger.info("Scheduler started: collecting every %sh", settings.collect_interval_hours)
     try:
@@ -328,6 +350,74 @@ async def api_robots_stream() -> StreamingResponse:
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
         },
+    )
+
+
+# --- Stuck-robot watchdog + Web Push --------------------------------------------
+# Both live behind the controls flag: the watchdog sends commands, and the push
+# subscription exists only to carry its "check the robot" message.
+@app.get("/api/watchdog", dependencies=[Depends(require_controls)])
+def api_watchdog() -> dict:
+    """The watchdog's live state per robot plus its recent events."""
+    if stuck_watchdog is None:
+        return {"enabled": False, "robots": {}, "events": []}
+    return {"enabled": True, **stuck_watchdog.state(), "events": db.get_watchdog_events(20)}
+
+
+@app.get("/api/push", dependencies=[Depends(require_controls)])
+def api_push() -> dict:
+    """The key a browser subscribes with, and how many already have."""
+    return {"public_key": push.public_key(), "subscriptions": db.count_push_subscriptions()}
+
+
+WELCOME_TITLE = "Notifications on"
+WELCOME_BODY = "This browser hears when a Litter-Robot stays stuck in use."
+
+
+@app.post("/api/push/subscribe", dependencies=[Depends(require_controls)])
+def api_push_subscribe(request: Request, payload: dict = Body(default={})) -> JSONResponse:
+    """Store what pushManager.subscribe() returned. The browser posts it on
+    every load (push.js), so a known endpoint is a refresh and nothing more; a
+    new one gets a welcome push at once, proving the whole path the moment it is
+    set up — a subscription that can't be delivered to is not worth keeping."""
+    endpoint = str(payload.get("endpoint") or "")
+    keys = payload.get("keys") or {}
+    p256dh, auth = str(keys.get("p256dh") or ""), str(keys.get("auth") or "")
+    if not endpoint.startswith("https://") or not p256dh or not auth:
+        return JSONResponse(
+            {"ok": False, "error": "a push subscription needs an https endpoint and keys"},
+            status_code=400,
+        )
+    new = db.save_push_subscription(
+        endpoint=endpoint,
+        p256dh=p256dh,
+        auth=auth,
+        user_agent=request.headers.get("user-agent", "")[:200],
+    )
+    if new:
+        row = {"endpoint": endpoint, "p256dh": p256dh, "auth": auth}
+        error = push.send_one(
+            row, push.payload(title=WELCOME_TITLE, body=WELCOME_BODY, url=push.tap_url(), tag="welcome")
+        )
+        if error:
+            db.delete_push_subscription(endpoint)
+            logger.warning("push subscription refused, the welcome push failed: %s", error)
+            return JSONResponse(
+                {"ok": False, "error": f"the push service refused the test message ({error})"},
+                status_code=502,
+            )
+    return JSONResponse({"ok": True, "new": new, "subscriptions": db.count_push_subscriptions()})
+
+
+@app.get("/sw.js")
+def service_worker() -> FileResponse:
+    """The push service worker (catdash/sw.js). Served at the root rather than
+    under /static because a service worker's scope is at most the path it was
+    fetched from, and a tapped notification has to be able to open the page."""
+    return FileResponse(
+        BASE_DIR / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
     )
 
 

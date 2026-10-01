@@ -9,6 +9,9 @@
   import FeederControls from "./FeederControls.svelte";
 
   const POLL_MS = 20000;
+  // The stuck-robot watchdog's state (/api/watchdog) is a separate, slower poll:
+  // it changes on the watchdog's own 5-minute cadence, not with the live stream.
+  const WATCHDOG_MS = 60000;
 
   // `live` is bound by the parent so it can show the stream state as a dot on the
   // Live tab. true while the SSE stream is connected.
@@ -19,6 +22,15 @@
   let loadError = $state(null);
   let busy = $state({}); // robot id -> command in flight
   let errors = $state({}); // robot id -> last command error
+  let watchdog = $state(null); // /api/watchdog, or null until loaded
+
+  async function loadWatchdog() {
+    try {
+      watchdog = await fetchJSON("/api/watchdog");
+    } catch (err) {
+      console.warn("[catdash] watchdog state failed to load:", err);
+    }
+  }
 
   const anyBusy = $derived(Object.values(busy).some(Boolean));
 
@@ -126,9 +138,12 @@
   onMount(() => {
     load(); // instant cached snapshot — shown until the stream delivers
     const es = openStream();
+    loadWatchdog();
+    const wdTimer = setInterval(loadWatchdog, WATCHDOG_MS);
     return () => {
       es.close();
       stopFallback();
+      clearInterval(wdTimer);
     };
   });
 </script>
@@ -145,7 +160,8 @@
       {#if robot.kind === "feeder"}
         <FeederControls {robot} busy={!!busy[robot.id]} error={errors[robot.id]} run={makeRun(robot)} />
       {:else}
-        <LitterRobotControls {robot} busy={!!busy[robot.id]} error={errors[robot.id]} run={makeRun(robot)} />
+        <LitterRobotControls {robot} busy={!!busy[robot.id]} error={errors[robot.id]} run={makeRun(robot)}
+          watchdog={watchdog} watch={watchdog?.robots?.[robot.id] ?? null} />
       {/if}
     {/each}
   </div>

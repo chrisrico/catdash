@@ -2,7 +2,23 @@
   // One Litter-Robot 4: live status + remote control. `robot` is the snapshot
   // from /api/robots; `run(path, body)` POSTs a command and the parent swaps in
   // the returned post-command snapshot. `busy` disables controls mid-command.
-  let { robot, busy = false, error = null, run } = $props();
+  // `watchdog` is the /api/watchdog document (or null) and `watch` this robot's
+  // entry in it: what the stuck-robot watchdog is doing about this unit.
+  let { robot, busy = false, error = null, run, watchdog = null, watch = null } = $props();
+
+  // One line about the stuck-robot watchdog: idle, counting, reset sent, or
+  // notified. Empty when the watchdog is off (the server-side flag) or unknown.
+  const watchdogLine = $derived.by(() => {
+    if (!watchdog?.enabled) return "";
+    if (!watch?.in_use_since) {
+      return `Stuck watchdog on · reset after ${watchdog.reset_after_minutes} min in use, notify ${watchdog.notify_after_minutes} min later`;
+    }
+    const mins = watch.in_use_minutes ?? 0;
+    if (watch.notified_at) return `In use ${mins} min · reset didn't clear it · notification sent`;
+    if (watch.reset_at) return `In use ${mins} min · reset ${watch.reset_ok ? "sent" : "failed"} · notify if still stuck`;
+    return `In use ${mins} min · reset at ${watchdog.reset_after_minutes} min`;
+  });
+  const watchdogActive = $derived(Boolean(watch?.reset_at));
 
   const NIGHT_LIGHT_MODES = ["OFF", "ON", "AUTO"];
   const BRIGHTNESS_LABELS = { 25: "Low", 50: "Medium", 100: "High" };
@@ -142,6 +158,9 @@
     </div>
   </div>
 
+  {#if watchdogLine}
+    <div class="robot-watchdog" class:active={watchdogActive} title="The stuck-robot watchdog auto-resets a unit that stays in use, then notifies subscribed browsers if that didn't clear it.">{watchdogLine}</div>
+  {/if}
   {#if faults.length}
     <div class="robot-faults">
       {#each faults as f}<span class="fault-badge">⚠ {f}</span>{/each}

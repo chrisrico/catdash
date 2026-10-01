@@ -309,6 +309,8 @@ tbody tr:hover { background: var(--panel-2); }
   font-size: 0.76rem;
 }
 .robot-error { color: var(--bad); font-size: 0.82rem; margin-top: 10px; }
+.robot-watchdog { color: var(--muted); font-size: 0.76rem; margin-top: 10px; }
+.robot-watchdog.active { color: var(--accent-2); }
 
 /* Label with a hover/focus tooltip (replaces always-on helper text). */
 .has-tip {

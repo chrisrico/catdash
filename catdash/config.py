@@ -42,6 +42,14 @@ class Settings:
     db_path: str
     port: int
     controls_enabled: bool
+    # Stuck-robot watchdog (needs controls): auto-reset a Litter-Robot that has
+    # sat "in use" too long, then notify if that didn't clear it. See watchdog.py.
+    watchdog_enabled: bool
+    watchdog_poll_minutes: int
+    watchdog_reset_after_minutes: int
+    watchdog_notify_after_minutes: int
+    # Where a tapped notification lands (and the contact the push services see).
+    dashboard_url: str
 
     @property
     def has_credentials(self) -> bool:
@@ -61,4 +69,9 @@ def get_settings() -> Settings:
         db_path=os.environ.get("DB_PATH") or "data/catdash.db",
         port=_int("PORT", 8080),
         controls_enabled=_bool("CONTROLS_ENABLED", False),
+        watchdog_enabled=_bool("STUCK_WATCHDOG", True),
+        watchdog_poll_minutes=max(1, _int("STUCK_WATCHDOG_POLL_MINUTES", 5)),
+        watchdog_reset_after_minutes=max(1, _int("STUCK_WATCHDOG_RESET_AFTER_MINUTES", 30)),
+        watchdog_notify_after_minutes=max(1, _int("STUCK_WATCHDOG_NOTIFY_AFTER_MINUTES", 30)),
+        dashboard_url=(os.environ.get("DASHBOARD_URL") or "").strip(),
     )

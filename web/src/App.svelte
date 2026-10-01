@@ -2,6 +2,7 @@
   import { fetchJSON, rangeToStart, ACTIVITY_CATEGORIES } from "./lib/api.js";
   import { loadPersisted, savePersisted } from "./lib/persist.js";
   import { themeState } from "./lib/theme.svelte.js";
+  import { ensurePush } from "./lib/push.js";
   import Controls from "./lib/Controls.svelte";
   import Robots from "./lib/Robots.svelte";
   import Cards from "./lib/Cards.svelte";
@@ -152,6 +153,17 @@
   async function loadConfig() {
     try {
       controlsEnabled = !!(await fetchJSON("/api/config")).controls_enabled;
+      // With controls on, the stuck-robot watchdog can push "check the robot"
+      // to this browser: ask for notification permission on the first click
+      // (push.js). The outcome lands in the header's status line.
+      if (controlsEnabled) {
+        ensurePush({
+          notify: (msg, isError = false) => {
+            status = msg;
+            statusError = isError;
+          },
+        });
+      }
     } catch (err) {
       console.warn("[catdash] /api/config failed:", err);
     } finally {

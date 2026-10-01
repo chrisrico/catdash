@@ -139,6 +139,11 @@ All via environment variables (see [`.env.example`](.env.example)):
 | `COLLECT_INTERVAL_HOURS`             | `6` | How often to pull from Whisker |
 | `REFRESH_COOLDOWN_MINUTES`           | `10` | Minimum minutes between manual *Collect now* runs (`429` inside the window; `0` disables) |
 | `CONTROLS_ENABLED`                   | `false` | Add the **Robots** panel: live status + **remote control** (start cycle, night light, wait time, panel lock, power, feeder snack, …). No dashboard auth, so only enable on a trusted network — see [Remote control](#remote-control). Off → the control endpoints `404` and catdash stays read-only |
+| `STUCK_WATCHDOG`                     | `true` | With controls on: auto-reset a Litter-Robot stuck "in use", then notify if that didn't clear it — see [Stuck-robot watchdog](#stuck-robot-watchdog). `false` turns it off |
+| `STUCK_WATCHDOG_RESET_AFTER_MINUTES` | `30` | Minutes in use before the watchdog sends a reset (never below the unit's wait time + 5) |
+| `STUCK_WATCHDOG_NOTIFY_AFTER_MINUTES`| `30` | Minutes after that reset, still in use, before it notifies |
+| `STUCK_WATCHDOG_POLL_MINUTES`        | `5` | How often the watchdog polls the robots' status |
+| `DASHBOARD_URL`                      | — | The dashboard's own https address: where a tapped notification opens, and the contact the push services see |
 | `PUID` / `PGID`                      | `1000` | Host user/group to run the container as (compose only) — set to the owner of `DATA_DIR` (`id -u` / `id -g`) |
 | `PORT`                               | `8080` | Dashboard port |
 | `TZ`                                 | _(host)_ | Timezone for log timestamps; defaults to the host's (via the `/etc/localtime` mount) — set to override |
@@ -181,6 +186,10 @@ The dashboard is built on a small JSON API you can also use directly:
   `/panel-brightness` · `/name` · `/reset` · `/hopper` · `/firmware-update`
 - `POST /api/feeders/{id}/snack` · `/gravity-mode` · `/meal-insert-size` ·
   `/night-light` · `/panel-lock` · `/name`
+- `GET /api/watchdog` — the [stuck-robot watchdog](#stuck-robot-watchdog)'s
+  state per robot (in use since, reset sent, notified) and its recent events
+- `GET /api/push` · `POST /api/push/subscribe` — Web Push: the server's VAPID
+  public key, and where the dashboard registers a browser's subscription
 
 Each command returns the robot's post-command snapshot (`{ok, robot}`).
 
@@ -210,10 +219,50 @@ hopper) — the toggle catches up automatically when the live update arrives.
 
 Not yet implemented (the Whisker app has them; `pylitterbot` doesn't expose
 them, so they're deferred): **editing** the feeding schedule (it's view-only
-here — skip/pause/add meals), editing the **sleep schedule**, **resetting the
-waste-drawer gauge**, and **push notifications**. Powering a unit *off* is
-supported but one-way from here — the Litter-Robot 4 has no remote power-on, so
-the dashboard warns before doing it.
+here — skip/pause/add meals), editing the **sleep schedule**, and **resetting
+the waste-drawer gauge**. Powering a unit *off* is supported but one-way from
+here — the Litter-Robot 4 has no remote power-on, so the dashboard warns before
+doing it.
+
+### Stuck-robot watchdog
+
+A Litter-Robot 4 can get stuck **"In Use"** (Cat Detected) and never cycle: the
+cat leaves, the cycle-delay countdown never completes, and the unit sits
+unusable until someone power-cycles it — on this unit the cause has been the
+weight scale reading a few pounds of phantom weight. With controls on, catdash
+watches for that (`catdash/watchdog.py`) in two stages:
+
+1. **Reset.** A Litter-Robot that has been in use for `STUCK_WATCHDOG_RESET_AFTER_MINUTES`
+   (default 30; never less than its wait time + 5, so a legitimate countdown is
+   never cancelled) gets the same reset the Live tab's **Reset** button sends —
+   one short press of the physical Reset button, which cancels the countdown and
+   returns the unit to Ready.
+2. **Notify.** If it is still (or again) in use `STUCK_WATCHDOG_NOTIFY_AFTER_MINUTES`
+   after that reset, every browser that has opened the dashboard gets a **push
+   notification** — "Check the Litter-Robot", with how long it has been stuck —
+   that opens the dashboard when tapped. The usual fix at that point is a power
+   cycle, or zeroing the scale (press Reset twice from Home).
+
+An episode ends only once the unit has been out of "in use" for two polls, so a
+reset that drops it to Ready for a minute before the scale re-triggers detection
+goes on to stage 2 rather than starting a fresh 30-minute clock and resetting
+forever. Units that are offline, powered off, or in sleep mode are never
+considered in use. Each robot's card on the Live tab shows what the watchdog is
+doing (`In use 34 min · reset sent · notify if still stuck`), and what it did is
+kept in the database (`watchdog_events`, surfaced by `GET /api/watchdog`).
+
+**Notifications are Web Push** (`catdash/push.py`, `catdash/sw.js`,
+`web/src/lib/push.js`): there is no button — with controls on, the dashboard
+asks for notification permission on your first click (Safari and Firefox only
+prompt from a gesture) and subscribes silently on every later load; blocking
+notifications in the browser's site settings is how a browser opts out. A
+browser seen for the first time gets a test notification at once, so one that
+can't be reached is never kept. Web Push needs nothing but HTTPS, which the
+Tailscale setup provides; the server's VAPID key pair is generated on first use
+and kept beside the database (`vapid_private.pem` in the data volume — a new
+key would orphan every subscription). On a phone, add the dashboard to the Home
+Screen first. Set `DASHBOARD_URL` to the tailnet address so a tap lands there
+(and Apple's push service gets a real contact).
 
 ## Local development
 

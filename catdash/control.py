@@ -502,6 +502,34 @@ class WhiskerControl:
         async with self._lock:
             return await self._run(op)
 
+    async def litter_robot_states(self) -> list[dict]:
+        """A fresh, minimal status of every Litter-Robot for the stuck-robot
+        watchdog (watchdog.py): one GraphQL query per unit on the shared
+        session, no login. `refresh()` also fires EVENT_UPDATE, so streaming
+        dashboards see the same data."""
+
+        async def op(account: Account) -> list[dict]:
+            out: list[dict] = []
+            for robot in account.robots:
+                if not _is_litter_robot(robot):
+                    continue
+                await robot.refresh()
+                out.append(
+                    {
+                        "id": robot.id,
+                        "name": robot.name,
+                        "status": robot.status.name,
+                        "online": robot.is_online,
+                        "power_on": robot.is_on,
+                        "is_sleeping": robot.is_sleeping,
+                        "wait_time_minutes": robot.clean_cycle_wait_time_minutes,
+                    }
+                )
+            return out
+
+        async with self._lock:
+            return await self._run(op)
+
     # --- Live streaming (Server-Sent Events) ---------------------------------
 
     def _snapshot_robot(self, robot: Any) -> dict | None:

@@ -13,6 +13,7 @@ export default defineConfig(({ command }) => ({
     proxy: {
       "/api": "http://127.0.0.1:8080",
       "/healthz": "http://127.0.0.1:8080",
+      "/sw.js": "http://127.0.0.1:8080",
     },
   },
 }));

@@ -15,6 +15,10 @@ Tables:
                        known history seeded at init (see _wait_time_history) plus
                        live snapshots on change (record_wait_time), so each
                        visit's duration is scored against the delay then in effect.
+  - push_subscriptions : browsers subscribed to Web Push (push.py) — what
+                       pushManager.subscribe() returned, keyed by endpoint.
+  - watchdog_events  : what the stuck-robot watchdog did and when (watchdog.py):
+                       resets it sent, notifications it pushed, episodes cleared.
 
 Timestamps are stored as ISO-8601 UTC strings, which sort and range-compare
 lexicographically. All writes are idempotent (INSERT OR IGNORE / upsert) so
@@ -89,6 +93,27 @@ CREATE TABLE IF NOT EXISTS wait_time (
     minutes     INTEGER,                 -- clean-cycle wait time setting
     inserted_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint    TEXT PRIMARY KEY,        -- the push service URL; a browser's identity
+    p256dh      TEXT NOT NULL,
+    auth        TEXT NOT NULL,
+    user_agent  TEXT,
+    created_at  TEXT NOT NULL,
+    last_error  TEXT,                    -- why the last send failed; NULL when it worked
+    last_sent_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS watchdog_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,           -- ISO-8601 UTC
+    robot_id    TEXT NOT NULL,
+    robot_name  TEXT,
+    event       TEXT NOT NULL,           -- 'reset' | 'notified' | 'cleared'
+    detail      TEXT,
+    inserted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_watchdog_ts ON watchdog_events(timestamp);
 """
 
 
@@ -723,3 +748,88 @@ def get_stats(pet_id: str | None = None) -> dict[str, Any]:
             "last": dict(last_fault) if last_fault else None,
         },
     }
+
+
+# --------------------------------------------------------------------------- #
+# Web Push subscriptions (push.py)
+# --------------------------------------------------------------------------- #
+def save_push_subscription(
+    *, endpoint: str, p256dh: str, auth: str, user_agent: str | None = None
+) -> bool:
+    """Idempotent: a browser re-posting the same subscription refreshes the
+    row's keys rather than adding a second. Returns True when it was new."""
+    with connect() as conn:
+        known = conn.execute(
+            "SELECT 1 FROM push_subscriptions WHERE endpoint = ?", (endpoint,)
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO push_subscriptions
+                (endpoint, p256dh, auth, user_agent, created_at, last_error)
+            VALUES (?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(endpoint) DO UPDATE SET
+                p256dh = excluded.p256dh, auth = excluded.auth,
+                user_agent = excluded.user_agent, last_error = NULL
+            """,
+            (endpoint, p256dh, auth, user_agent, _now()),
+        )
+    return known is None
+
+
+def delete_push_subscription(endpoint: str) -> bool:
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+        return cur.rowcount > 0
+
+
+def list_push_subscriptions() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT endpoint, p256dh, auth, user_agent, created_at, last_error, last_sent_at "
+            "FROM push_subscriptions ORDER BY created_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_push_subscriptions() -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM push_subscriptions").fetchone()[0]
+
+
+def mark_push_result(endpoint: str, error: str | None) -> None:
+    with connect() as conn:
+        if error is None:
+            conn.execute(
+                "UPDATE push_subscriptions SET last_error = NULL, last_sent_at = ? WHERE endpoint = ?",
+                (_now(), endpoint),
+            )
+        else:
+            conn.execute(
+                "UPDATE push_subscriptions SET last_error = ? WHERE endpoint = ?",
+                (error, endpoint),
+            )
+
+
+# --------------------------------------------------------------------------- #
+# Stuck-robot watchdog events (watchdog.py)
+# --------------------------------------------------------------------------- #
+def insert_watchdog_event(
+    *, robot_id: str, robot_name: str | None, event: str, detail: str | None = None
+) -> None:
+    now = _now()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO watchdog_events (timestamp, robot_id, robot_name, event, detail, inserted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (now, robot_id, robot_name, event, detail, now),
+        )
+
+
+def get_watchdog_events(limit: int = 20) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT timestamp, robot_id, robot_name, event, detail FROM watchdog_events "
+            "ORDER BY timestamp DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
