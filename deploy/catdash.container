@@ -1,0 +1,37 @@
+# Podman quadlet unit for catdash, installed by scripts/deploy.sh into
+# ~/.config/containers/systemd/ on the host. The image is built ON the host from
+# the committed tree (localhost/catdash:latest) — nothing is pulled from a
+# registry, and there is deliberately no AutoUpdate= line: a registry
+# auto-update would replace the locally built image with the public one, and
+# deploy.sh restarts the unit itself when it has built something new.
+#
+# Host-specific values: the published port (the dashboard is reached through
+# Tailscale, so it binds to loopback only), the uid the DB folder is owned by,
+# and the env file holding the Whisker credentials and CONTROLS_ENABLED etc.
+[Unit]
+Description=catdash
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Container]
+Image=localhost/catdash:latest
+ContainerName=catdash
+Network=arr.network
+PublishPort=127.0.0.1:8081:8080
+Environment=TZ=America/Chicago
+User=1000:1000
+Environment=DB_PATH=/data/catdash.db
+EnvironmentFile=%h/containers/catdash.env
+Volume=%h/containers/catdash:/data:Z
+HealthCmd=python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz').status==200 else 1)"
+HealthInterval=1m
+HealthStartPeriod=30s
+HealthOnFailure=kill
+
+[Service]
+Restart=always
+RestartSec=15
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

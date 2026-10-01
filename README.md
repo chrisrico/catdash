@@ -266,14 +266,23 @@ Screen first. Set `DASHBOARD_URL` to the tailnet address so a tap lands there
 
 ### Deploying from a checkout
 
-`scripts/deploy.sh` rolls a commit out end to end: it pushes `main`, waits for
-the [publish workflow](.github/workflows/publish.yml) to build *that* commit's
-image, pulls it on the host over SSH, verifies the pulled image was built from
-the commit (via its `org.opencontainers.image.revision` label), restarts the
-podman quadlet unit only if the image changed, and waits for `/healthz`.
-`--check` runs just the preflight (git state, build status, what's deployed);
-`--no-wait` rolls out whatever `:latest` already is. The SSH host, unit name,
-and image are overridable with `DEPLOY_HOST`, `DEPLOY_UNIT`, `DEPLOY_IMAGE`.
+`scripts/deploy.sh` builds and rolls out the commit you're on without a registry
+or CI in the loop: it streams `git archive HEAD` over SSH to the host, runs
+`podman build` there (the host is x86_64, so it's a native build), tags the
+result `localhost/catdash:<sha>` and `:latest` labelled with the commit,
+installs the quadlet unit from [`deploy/catdash.container`](deploy/catdash.container)
+if it differs from the one on the host, restarts the unit only if the running
+image changed, and waits for `/healthz`. Only committed files are deployed.
+`--check` runs just the preflight (git state, what the host runs, whether the
+unit file is current); `--build-only` builds and tags without installing. The
+SSH host, unit name, image, and branch are overridable with `DEPLOY_HOST`,
+`DEPLOY_UNIT`, `DEPLOY_IMAGE`, `DEPLOY_BRANCH`.
+
+The unit deliberately has no `AutoUpdate=registry`: that would replace the
+locally built image with the public one from GHCR. The
+[publish workflow](.github/workflows/publish.yml) still builds that public image
+on every push to `main` for anyone deploying from the registry; it's just not
+part of this deploy path.
 
 ## Local development
 
