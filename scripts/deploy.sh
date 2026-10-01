@@ -5,12 +5,15 @@
 #   scripts/deploy.sh               build HEAD on the host and roll it out
 #   scripts/deploy.sh --check       preflight only: git state, host, what's deployed
 #   scripts/deploy.sh --build-only  build and tag on the host, but don't install/restart
+#   scripts/deploy.sh --force       rebuild and restart even if HEAD is already deployed
 #
 # Flow: `git archive HEAD` is streamed over SSH into a scratch dir on the host,
 # `podman build` turns it into localhost/catdash:<sha> (also tagged :latest,
 # labelled with the commit), the quadlet unit in deploy/catdash.container is
 # installed if it differs from what's on the host, the unit is restarted only
-# if the running image changed, and /healthz is polled before success.
+# if the running image changed, and /healthz is polled before success. When
+# the host already runs HEAD (by that label) and the unit is current, it stops
+# before building — a repeat run is a no-op unless --force.
 # Uncommitted changes are never deployed: commit first.
 #
 # Overrides (env): DEPLOY_HOST (ssh target, default fworkai), DEPLOY_UNIT
@@ -27,11 +30,12 @@ UNIT_FILE="deploy/catdash.container"
 REMOTE_UNIT_DIR=".config/containers/systemd"
 BUILD_DIR="/tmp/${UNIT}-build"
 
-CHECK=0 BUILD_ONLY=0
+CHECK=0 BUILD_ONLY=0 FORCE=0
 for arg in "$@"; do
   case "$arg" in
     --check) CHECK=1 ;;
     --build-only) BUILD_ONLY=1 ;;
+    --force) FORCE=1 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -41,6 +45,8 @@ say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m ✓\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m ✗\033[0m %s\n' "$*" >&2; exit 1; }
 remote() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" "$@"; }
+# Is the host's copy of the quadlet unit identical to ours?
+unit_current() { remote "diff -q $REMOTE_UNIT_DIR/$(basename "$UNIT_FILE") -" < "$UNIT_FILE" >/dev/null 2>&1; }
 # What commit the host's image/container was built from (its OCI revision label).
 revision_of() { remote "podman image inspect $1 --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' 2>/dev/null" || true; }
 
@@ -63,13 +69,20 @@ PORT="$(remote "podman port $UNIT 8080/tcp 2>/dev/null | head -1 | sed 's/.*://'
 if [ -n "$RUNNING_REV" ]; then RUNNING_DESC="commit ${RUNNING_REV:0:7}"; else RUNNING_DESC="an unlabelled image"; fi
 ok "$HOST reachable; $UNIT is $(remote "systemctl --user is-active $UNIT" || true), running $RUNNING_DESC"
 
+if unit_current; then UNIT_CURRENT=1; else UNIT_CURRENT=0; fi
 if [ "$CHECK" = 1 ]; then
   if [ "$RUNNING_REV" = "$SHA" ]; then ok "the host already runs $SHORT"; else say "$SHORT is not deployed (host has ${RUNNING_REV:0:7})"; fi
-  if remote "diff -q $REMOTE_UNIT_DIR/$(basename "$UNIT_FILE") -" < "$UNIT_FILE" >/dev/null 2>&1; then
+  if [ "$UNIT_CURRENT" = 1 ]; then
     ok "quadlet unit on the host matches $UNIT_FILE"
   else
     say "quadlet unit on the host differs from $UNIT_FILE (deploy will install it)"
   fi
+  exit 0
+fi
+
+# The guard: nothing to do when HEAD is what's running and the unit is current.
+if [ "$FORCE" = 0 ] && [ "$BUILD_ONLY" = 0 ] && [ "$RUNNING_REV" = "$SHA" ] && [ "$UNIT_CURRENT" = 1 ]; then
+  ok "$SHORT is already deployed and the unit is current; nothing to do (--force to rebuild and restart)"
   exit 0
 fi
 
@@ -95,15 +108,15 @@ fi
 
 # --- Install the unit (if it changed) and restart (if the image changed) ---------
 UNIT_CHANGED=0
-if ! remote "diff -q $REMOTE_UNIT_DIR/$(basename "$UNIT_FILE") -" < "$UNIT_FILE" >/dev/null 2>&1; then
+if [ "$UNIT_CURRENT" = 0 ]; then
   say "Installing $UNIT_FILE on $HOST"
   remote "mkdir -p $REMOTE_UNIT_DIR && cat > $REMOTE_UNIT_DIR/$(basename "$UNIT_FILE") && systemctl --user daemon-reload" < "$UNIT_FILE"
   UNIT_CHANGED=1
   ok "unit installed and systemd reloaded"
 fi
 
-if [ "$UNIT_CHANGED" = 0 ] && [ "$RUNNING_IMAGE" = "$NEW_IMAGE" ]; then
-  ok "$UNIT is already running this image; nothing to restart"
+if [ "$FORCE" = 0 ] && [ "$UNIT_CHANGED" = 0 ] && [ "$RUNNING_IMAGE" = "$NEW_IMAGE" ]; then
+  ok "$UNIT is already running this exact image; nothing to restart"
 else
   say "Restarting $UNIT"
   remote "systemctl --user restart $UNIT"

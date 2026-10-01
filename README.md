@@ -273,8 +273,11 @@ result `localhost/catdash:<sha>` and `:latest` labelled with the commit,
 installs the quadlet unit from [`deploy/catdash.container`](deploy/catdash.container)
 if it differs from the one on the host, restarts the unit only if the running
 image changed, and waits for `/healthz`. Only committed files are deployed.
-`--check` runs just the preflight (git state, what the host runs, whether the
-unit file is current); `--build-only` builds and tags without installing. The
+A repeat run is a no-op: when the host already runs HEAD (by the image's
+revision label) and the unit file is current, it stops before building;
+`--force` rebuilds and restarts anyway. `--check` runs just the preflight (git
+state, what the host runs, whether the unit file is current); `--build-only`
+builds and tags without installing. The
 SSH host, unit name, image, and branch are overridable with `DEPLOY_HOST`,
 `DEPLOY_UNIT`, `DEPLOY_IMAGE`, `DEPLOY_BRANCH`.
 
