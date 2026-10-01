@@ -264,6 +264,17 @@ key would orphan every subscription). On a phone, add the dashboard to the Home
 Screen first. Set `DASHBOARD_URL` to the tailnet address so a tap lands there
 (and Apple's push service gets a real contact).
 
+### Deploying from a checkout
+
+`scripts/deploy.sh` rolls a commit out end to end: it pushes `main`, waits for
+the [publish workflow](.github/workflows/publish.yml) to build *that* commit's
+image, pulls it on the host over SSH, verifies the pulled image was built from
+the commit (via its `org.opencontainers.image.revision` label), restarts the
+podman quadlet unit only if the image changed, and waits for `/healthz`.
+`--check` runs just the preflight (git state, build status, what's deployed);
+`--no-wait` rolls out whatever `:latest` already is. The SSH host, unit name,
+and image are overridable with `DEPLOY_HOST`, `DEPLOY_UNIT`, `DEPLOY_IMAGE`.
+
 ## Local development
 
 Backend (Python via `uv`) and frontend (Svelte via Node ≥ 20) are separate builds:
