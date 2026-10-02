@@ -23,6 +23,14 @@ Tables:
 Timestamps are stored as ISO-8601 UTC strings, which sort and range-compare
 lexicographically. All writes are idempotent (INSERT OR IGNORE / upsert) so
 overlapping collection runs never create duplicates.
+
+Bad weigh-ins (partial step-ons, two cats, a hand on the scale) are never
+deleted — the next collection would just re-insert them. Instead both weight
+tables carry a nullable `invalid_at`: NULL means the reading counts, a timestamp
+means someone marked it invalid then (set_weigh_in_invalid). Invalid rows are
+still returned by the read queries, flagged `invalid`, so the UI can show and
+restore them, but the weight stats skip them. The visit itself still counts —
+only the measured weight is wrong.
 """
 
 from __future__ import annotations
@@ -49,6 +57,7 @@ CREATE TABLE IF NOT EXISTS weight_readings (
     timestamp   TEXT NOT NULL,           -- ISO-8601 UTC of the weigh-in
     weight_lbs  REAL NOT NULL,
     inserted_at TEXT NOT NULL,
+    invalid_at  TEXT,                    -- set when marked invalid (see module doc)
     PRIMARY KEY (pet_id, timestamp)
 );
 CREATE INDEX IF NOT EXISTS idx_weight_pet_ts ON weight_readings(pet_id, timestamp);
@@ -59,6 +68,7 @@ CREATE TABLE IF NOT EXISTS activities (
     action      TEXT NOT NULL,           -- human label, e.g. "Cat Detected"
     weight_lbs  REAL,                    -- parsed when action is a weigh-in
     inserted_at TEXT NOT NULL,
+    invalid_at  TEXT,                    -- weigh-ins only: set when marked invalid
     UNIQUE (timestamp, action)
 );
 CREATE INDEX IF NOT EXISTS idx_activities_ts ON activities(timestamp);
@@ -115,6 +125,15 @@ CREATE TABLE IF NOT EXISTS watchdog_events (
 );
 CREATE INDEX IF NOT EXISTS idx_watchdog_ts ON watchdog_events(timestamp);
 """
+
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS does nothing
+# for an existing table, so each (table, column, type) here is ALTERed in if the
+# live schema lacks it. Append-only: never remove or rename an entry.
+_ADDED_COLUMNS = [
+    ("weight_readings", "invalid_at", "TEXT"),
+    ("activities", "invalid_at", "TEXT"),
+]
 
 
 def _now() -> str:
@@ -189,6 +208,7 @@ def init_db() -> None:
     try:
         with connect() as conn:
             conn.executescript(SCHEMA)
+            _add_missing_columns(conn)
             _seed_wait_time_history(conn)
     except sqlite3.OperationalError as exc:
         # Fallback for unwritability the os.access() precheck can't see —
@@ -196,6 +216,13 @@ def init_db() -> None:
         if any(marker in str(exc) for marker in _READONLY_MARKERS):
             raise DatabaseNotWritable(_unwritable_message(path)) from exc
         raise
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, column, col_type in _ADDED_COLUMNS:
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
 
 def _count_new(conn: sqlite3.Connection, fn) -> int:
@@ -416,26 +443,79 @@ def get_weights(
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     with connect() as conn:
         rows = conn.execute(
-            f"""SELECT pet_id, timestamp, weight_lbs FROM weight_readings
+            f"""SELECT pet_id, timestamp, weight_lbs, invalid_at FROM weight_readings
                 {where} ORDER BY timestamp""",
             params,
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [_with_invalid(r) for r in rows]
 
 
 def get_raw_weights(
     start: str | None = None, end: str | None = None
 ) -> list[dict[str, Any]]:
-    """Raw weigh-ins parsed from the activity stream (not pet-attributed)."""
+    """Raw weigh-ins parsed from the activity stream (not pet-attributed).
+
+    Includes weigh-ins marked invalid (flagged `invalid: true`) so the dashboard
+    can still list and restore them; callers charting weight must skip those."""
     where, params = _range("timestamp", start, end)
     clause = " AND weight_lbs IS NOT NULL" if where else " WHERE weight_lbs IS NOT NULL"
     with connect() as conn:
         rows = conn.execute(
-            f"""SELECT timestamp, weight_lbs FROM activities
+            f"""SELECT id, timestamp, weight_lbs, invalid_at FROM activities
                 {where}{clause} ORDER BY timestamp""",
             params,
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [_with_invalid(r) for r in rows]
+
+
+def _with_invalid(row: sqlite3.Row) -> dict[str, Any]:
+    """Row -> dict with `invalid_at` folded into a boolean `invalid`."""
+    d = dict(row)
+    d["invalid"] = d.pop("invalid_at") is not None
+    return d
+
+
+# How far apart a raw weigh-in (activity stream) and its curated twin
+# (pet.fetch_weight_history) can be. Whisker stamps the curated reading a few
+# seconds after the raw one — same weight — so invalidating one must cover both,
+# else the "Latest weight" stat keeps quoting the bad value.
+_CURATED_MATCH_WINDOW = timedelta(minutes=2)
+
+
+def set_weigh_in_invalid(activity_id: int, invalid: bool) -> dict[str, Any] | None:
+    """Mark a raw weigh-in (an `activities` row with a weight) invalid, or
+    restore it. The curated reading with the same weight within
+    _CURATED_MATCH_WINDOW is flagged the same way. Returns the updated weigh-in
+    as get_raw_weights() shapes it, or None if the id isn't a weigh-in."""
+    stamp = _now() if invalid else None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id, timestamp, weight_lbs FROM activities "
+            "WHERE id = ? AND weight_lbs IS NOT NULL",
+            [activity_id],
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE activities SET invalid_at = ? WHERE id = ?", [stamp, activity_id]
+        )
+        ts = _parse_ts(row["timestamp"])
+        conn.execute(
+            """UPDATE weight_readings SET invalid_at = ?
+               WHERE weight_lbs = ? AND timestamp BETWEEN ? AND ?""",
+            [
+                stamp,
+                row["weight_lbs"],
+                (ts - _CURATED_MATCH_WINDOW).isoformat(),
+                (ts + _CURATED_MATCH_WINDOW).isoformat(),
+            ],
+        )
+    return {
+        "id": row["id"],
+        "timestamp": row["timestamp"],
+        "weight_lbs": row["weight_lbs"],
+        "invalid": invalid,
+    }
 
 
 def get_usage(
@@ -510,11 +590,11 @@ def get_activities(
         where = f"{where} AND {clause}" if where else f" WHERE {clause}"
     with connect() as conn:
         rows = conn.execute(
-            f"""SELECT timestamp, action, weight_lbs FROM activities
+            f"""SELECT id, timestamp, action, weight_lbs, invalid_at FROM activities
                 {where} ORDER BY timestamp DESC LIMIT ?""",
             [*params, limit],
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [_with_invalid(r) for r in rows]
 
 
 def get_faults(
@@ -661,7 +741,11 @@ def get_visit_durations(
 
 def get_stats(pet_id: str | None = None) -> dict[str, Any]:
     with connect() as conn:
-        wclause, wparams = ("WHERE pet_id = ?", [pet_id]) if pet_id else ("", [])
+        # Invalidated readings are excluded from every weight figure.
+        wclause, wparams = "WHERE invalid_at IS NULL", []
+        if pet_id:
+            wclause += " AND pet_id = ?"
+            wparams = [pet_id]
         weight = conn.execute(
             f"""SELECT COUNT(*) AS count, MIN(weight_lbs) AS min, MAX(weight_lbs) AS max,
                        MIN(timestamp) AS first, MAX(timestamp) AS last

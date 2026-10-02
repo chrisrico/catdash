@@ -4,7 +4,8 @@
   // axis in cups — so you can read weight against intake. Raw weigh-ins are a
   // legend-toggleable scatter (hidden by default). Hovering a bucket shows the
   // period's values; clicking one opens a modal listing every weigh-in and food
-  // entry that falls in it.
+  // entry that falls in it. From that list a bad weigh-in can be marked invalid
+  // (onToggleInvalid) — it stays listed, struck through, and leaves the trend.
   import Chart from "./Chart.svelte";
   import Modal from "./Modal.svelte";
   import {
@@ -25,19 +26,23 @@
   import { palette, baseOption, timeAxis, valueAxis } from "./echarts.js";
   import { themeState } from "./theme.svelte.js";
 
-  let { weights, food } = $props();
+  let { weights, food, onToggleInvalid = null } = $props();
 
   const RAW_NAME = "Raw weigh-ins";
   const DAY = 86400000;
 
   // Outlier-rejected weigh-ins as [ms, lbs] — the basis for the trend line and
-  // the x-window. The feeder's history (years) usually predates the litter
-  // robot's, so weight covers a shorter window; we anchor the combined view to
-  // the weight-tracked period (else the weight line collapses into a sliver) and
-  // bucket both series by that span. With no weight data, show food alone.
+  // the x-window. Weigh-ins marked invalid are dropped before the automatic
+  // outlier pass so a hand-flagged reading never pulls the local median. The
+  // feeder's history (years) usually predates the litter robot's, so weight
+  // covers a shorter window; we anchor the combined view to the weight-tracked
+  // period (else the weight line collapses into a sliver) and bucket both
+  // series by that span. With no weight data, show food alone.
   const raw = $derived(
     rejectWeightOutliers(
-      (weights?.raw ?? []).map((r) => [new Date(r.timestamp).getTime(), r.weight_lbs])
+      (weights?.raw ?? [])
+        .filter((r) => !r.invalid)
+        .map((r) => [new Date(r.timestamp).getTime(), r.weight_lbs])
     )
   );
   const allFood = $derived((food?.daily ?? []).map((d) => [dayToLocalTime(d.date), d.cups]));
@@ -60,11 +65,17 @@
   const detail = $derived.by(() => {
     if (bucketMs == null) return null;
     const inBucket = (ms) => bucketStartMs(ms, unit) === bucketMs;
-    // All raw weigh-ins (not outlier-filtered) — this is the full drill-down.
+    // All raw weigh-ins (not outlier-filtered, invalid ones included) — this
+    // is the full drill-down, and where an invalid reading can be restored.
     const weighIns = (weights?.raw ?? [])
-      .map((r) => [new Date(r.timestamp).getTime(), r.weight_lbs])
-      .filter(([ms]) => inBucket(ms))
-      .sort((a, b) => a[0] - b[0]);
+      .map((r) => ({
+        id: r.id,
+        ms: new Date(r.timestamp).getTime(),
+        lbs: r.weight_lbs,
+        invalid: !!r.invalid,
+      }))
+      .filter((w) => inBucket(w.ms))
+      .sort((a, b) => a.ms - b.ms);
     // Individual meals/snacks (not the daily total), same window as the bars.
     const meals = (food?.feedings ?? [])
       .map((f) => ({
@@ -75,7 +86,7 @@
       }))
       .filter((m) => inBucket(m.ms) && (xMin == null || m.ms >= xMin))
       .sort((a, b) => a.ms - b.ms);
-    return { weighIns, meals };
+    return { weighIns, meals, invalidCount: weighIns.filter((w) => w.invalid).length };
   });
 
   const option = $derived.by(() => {
@@ -179,15 +190,34 @@
       <div class="empty">No weigh-ins or feedings in this period.</div>
     {:else}
       {#if detail.weighIns.length}
-        <p class="modal-sub">Weigh-ins ({detail.weighIns.length})</p>
+        <p class="modal-sub">
+          Weigh-ins ({detail.weighIns.length}{detail.invalidCount
+            ? `, ${detail.invalidCount} invalid`
+            : ""})
+        </p>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>When</th><th class="num">Weight</th></tr></thead>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th class="num">Weight</th>
+                {#if onToggleInvalid}<th class="num"></th>{/if}
+              </tr>
+            </thead>
             <tbody>
-              {#each detail.weighIns as [ms, lbs]}
-                <tr>
-                  <td>{fmtDateTime(ms)}</td>
-                  <td class="num"><span class="pill weight">{fmtLbs(lbs)}</span></td>
+              {#each detail.weighIns as w (w.id)}
+                <tr class:invalid={w.invalid}>
+                  <td>{fmtDateTime(w.ms)}</td>
+                  <td class="num">
+                    <span class="pill weight" class:invalid={w.invalid}>{fmtLbs(w.lbs)}</span>
+                  </td>
+                  {#if onToggleInvalid}
+                    <td class="num">
+                      <button class="link-btn" onclick={() => onToggleInvalid(w.id, !w.invalid)}>
+                        {w.invalid ? "Restore" : "Mark invalid"}
+                      </button>
+                    </td>
+                  {/if}
                 </tr>
               {/each}
             </tbody>

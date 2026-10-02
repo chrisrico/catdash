@@ -17,6 +17,24 @@ export async function fetchJSON(url) {
   return res.json();
 }
 
+// POST a JSON body. Resolves with the parsed response; rejects with the
+// server's `detail` (or the HTTP status) so callers can show it as-is.
+export async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      detail = (await res.json()).detail || detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export const fmtLbs = (v) => (v == null ? "—" : `${Number(v).toFixed(2)} lbs`);
 export const fmtCups = (v) =>
   v == null ? "—" : `${Number(v).toFixed(2)} cup${Number(v) === 1 ? "" : "s"}`;

@@ -1,5 +1,5 @@
 <script>
-  import { fetchJSON, rangeToStart, ACTIVITY_CATEGORIES } from "./lib/api.js";
+  import { fetchJSON, postJSON, rangeToStart, ACTIVITY_CATEGORIES } from "./lib/api.js";
   import { loadPersisted, savePersisted } from "./lib/persist.js";
   import { themeState } from "./lib/theme.svelte.js";
   import { ensurePush } from "./lib/push.js";
@@ -246,6 +246,21 @@
     }
   }
 
+  // Flag a raw weigh-in as invalid (or restore it). The server keeps the row
+  // but charts and stats skip it, so refetch everything that shows weights.
+  async function setWeighInInvalid(id, invalid) {
+    try {
+      await postJSON(`/api/weigh-ins/${id}/invalid`, { invalid });
+    } catch (err) {
+      console.error("[catdash] weigh-in update failed:", err);
+      status = `Weigh-in update failed: ${err.message}`;
+      statusError = true;
+      return;
+    }
+    await refresh();
+    if (!statusError) status = invalid ? "Weigh-in marked invalid" : "Weigh-in restored";
+  }
+
   $effect(() => {
     // Re-fetch whenever the pet or range selection changes (after the initial
     // pet load has settled petId, so startup fetches only once).
@@ -308,7 +323,11 @@
         <span class="hint">Weight trend (median + 7-day avg) · food dispensed per bucket</span>
       </div>
       {#if sections.weights.data && sections.food.data}
-        <WeightFoodChart weights={sections.weights.data} food={sections.food.data} />
+        <WeightFoodChart
+          weights={sections.weights.data}
+          food={sections.food.data}
+          onToggleInvalid={setWeighInInvalid}
+        />
       {:else if sections.weights.error || sections.food.error}
         <div class="panel-error">
           Chart failed to load: {sections.weights.error || sections.food.error}
@@ -336,7 +355,7 @@
         <ActivityFilter bind:selected={activityTypes} />
       </div>
       {#if sections.activities.data}
-        <ActivityTable activities={sections.activities.data} />
+        <ActivityTable activities={sections.activities.data} onToggleInvalid={setWeighInInvalid} />
       {:else if sections.activities.error}
         <div class="panel-error">Activity failed to load: {sections.activities.error}</div>
       {/if}
