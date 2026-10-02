@@ -186,6 +186,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tbody tr:hover { background: var(--panel-2); }
 .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); font-size: 0.8rem; }
 .pill.weight { color: var(--accent-2); border-color: rgba(240, 136, 62, 0.4); }
+/* A weigh-in marked invalid stays listed but visibly out of the data. */
+.pill.weight.invalid { color: var(--muted); border-color: var(--border); text-decoration: line-through; }
+tr.invalid td { color: var(--muted); }
+/* Inline text action inside a table row (e.g. "Mark invalid" / "Restore"). */
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 0.8rem; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
+.link-btn:hover { filter: brightness(1.15); }
 
 .foot { color: var(--muted); font-size: 0.78rem; text-align: center; padding-top: 8px; }
 .empty { color: var(--muted); padding: 40px; text-align: center; }

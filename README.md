@@ -21,6 +21,10 @@ stores it **permanently** — so you keep a full history instead of the rolling
   weigh-ins toggleable from the legend), a usage chart (cycles + weigh-ins per day),
   a feeder chart (cups dispensed per day + hopper level), summary stat cards, and a
   recent-activity feed. Light/dark theme follows the OS.
+- **Lets you mark a bad weigh-in invalid** (a partial step-on, two cats, a hand on
+  the scale) from the weight chart's drill-down or the activity feed. The reading
+  is kept — deleting it would only have the next collection re-add it — but it
+  drops out of the trend and the weight stats, and can be restored any time.
 
 Runs as **one small container, one process** — a FastAPI app that both serves the
 dashboard and runs the scheduled collector in-process (no cron, no second service).
@@ -158,7 +162,11 @@ All via environment variables (see [`.env.example`](.env.example)):
 The dashboard is built on a small JSON API you can also use directly:
 
 - `GET /api/pets` — pets/cats on the account
-- `GET /api/weights?pet_id=&start=&end=` — `{curated, raw}` weight series
+- `GET /api/weights?pet_id=&start=&end=` — `{curated, raw}` weight series (a
+  point marked invalid carries `invalid: true`; charts and stats skip those)
+- `POST /api/weigh-ins/{id}/invalid` — body `{"invalid": true|false}`: flag a raw
+  weigh-in (`id` from `/api/weights` `raw` or `/api/activities`) as invalid, or
+  restore it. Its curated twin (same weight, seconds later) is flagged with it.
 - `GET /api/usage?start=&end=` — daily cycles + weigh-ins
 - `GET /api/activities?start=&end=&limit=` — litter-box activity feed
 - `GET /api/feedings?start=&end=&limit=` — feeder meal/snack events

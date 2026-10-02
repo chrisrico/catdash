@@ -91,7 +91,7 @@
     // nearest preceding weigh-in (within MATCH_WINDOW); leave weight or duration
     // blank when its half of the pair is missing.
     const weighIns = (weights?.raw ?? [])
-      .map((r) => ({ ms: new Date(r.timestamp).getTime(), weight: r.weight_lbs }))
+      .map((r) => ({ ms: new Date(r.timestamp).getTime(), weight: r.weight_lbs, invalid: !!r.invalid }))
       .filter((w) => inBucket(w.ms))
       .sort((a, b) => a.ms - b.ms);
     const durs = (duration?.samples ?? [])
@@ -110,13 +110,13 @@
       }
       if (match >= 0) {
         used.add(match);
-        rows.push({ ms: weighIns[match].ms, weight: weighIns[match].weight, sec: d.sec });
+        rows.push({ ...weighIns[match], sec: d.sec });
       } else {
         rows.push({ ms: d.ms, weight: null, sec: d.sec });
       }
     }
     weighIns.forEach((w, i) => {
-      if (!used.has(i)) rows.push({ ms: w.ms, weight: w.weight, sec: null });
+      if (!used.has(i)) rows.push({ ...w, sec: null });
     });
     rows.sort((a, b) => a.ms - b.ms);
     return { rows };
@@ -284,7 +284,7 @@
               <tr>
                 <td>{fmtDateTime(row.ms)}</td>
                 <td class="num">
-                  {#if row.weight != null}<span class="pill weight">{fmtLbs(row.weight)}</span>{/if}
+                  {#if row.weight != null}<span class="pill weight" class:invalid={row.invalid}>{fmtLbs(row.weight)}</span>{/if}
                 </td>
                 <td class="num">{row.sec != null ? fmtDur(row.sec) : ""}</td>
               </tr>

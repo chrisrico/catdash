@@ -239,6 +239,21 @@ def api_stats(pet_id: str | None = Query(None)) -> dict:
     return db.get_stats(pet_id=pet_id)
 
 
+@app.post("/api/weigh-ins/{activity_id}/invalid")
+def api_weigh_in_invalid(activity_id: int, payload: dict = Body(default={})) -> dict:
+    """Mark a raw weigh-in invalid (`{"invalid": true}`) or restore it
+    (`{"invalid": false}`). The reading is kept — the next collection would only
+    re-insert it — but flagged, so charts and stats skip it. Its curated twin
+    (same weight, seconds later) is flagged alongside it."""
+    invalid = payload.get("invalid", True)
+    if not isinstance(invalid, bool):
+        raise HTTPException(status_code=400, detail="`invalid` must be a boolean")
+    row = db.set_weigh_in_invalid(activity_id, invalid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Weigh-in not found")
+    return {"ok": True, "weigh_in": row}
+
+
 @app.get("/api/habits")
 def api_habits(
     start: str | None = Query(None),

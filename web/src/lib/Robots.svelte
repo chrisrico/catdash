@@ -4,7 +4,7 @@
   // streams live updates over Server-Sent Events (backed by the Whisker
   // WebSocket). If the stream drops it falls back to polling until it recovers.
   import { onMount } from "svelte";
-  import { fetchJSON } from "./api.js";
+  import { fetchJSON, postJSON } from "./api.js";
   import LitterRobotControls from "./LitterRobotControls.svelte";
   import FeederControls from "./FeederControls.svelte";
 
@@ -60,21 +60,9 @@
     loadError = null;
   }
 
-  async function postCommand(robot, path, body) {
+  function postCommand(robot, path, body) {
     const base = robot.kind === "feeder" ? "/api/feeders" : "/api/robots";
-    const res = await fetch(`${base}/${robot.id}/${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body ?? {}),
-    });
-    if (!res.ok) {
-      let detail = `HTTP ${res.status}`;
-      try {
-        detail = (await res.json()).detail || detail;
-      } catch {}
-      throw new Error(detail);
-    }
-    return res.json(); // { ok, robot }
+    return postJSON(`${base}/${robot.id}/${path}`, body); // { ok, robot }
   }
 
   function makeRun(robot) {
