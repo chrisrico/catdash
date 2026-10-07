@@ -285,14 +285,22 @@ async def collect() -> dict:
         activity_start = (
             _incremental_start_date(db.latest_activity_timestamp()) or _ACTIVITY_START
         )
-        feeding_since = db.latest_feeding_timestamp()
+        # Feeders: record each unit (its cat assignment lives in the DB, set from
+        # the dashboard). While there's exactly one, it owns any hopper snapshots
+        # stored before feeders were tracked. (Legacy feedings are claimed row by
+        # row as each feeder re-fetches them — see db.upsert_feedings.)
+        feeder_robots = [r for r in account.robots if hasattr(r, "food_level")]
+        db.upsert_feeders(
+            {"id": str(r.id), "name": r.name, "serial": r.serial} for r in feeder_robots
+        )
+        if len(feeder_robots) == 1:
+            db.claim_legacy_food_levels(str(feeder_robots[0].id))
         # Daily cycle counts: refresh only the days since the last stored one
         # (plus margin) once we have history; full window on a first run.
         insight_request = _insight_request(db.latest_usage_date(), settings.insight_days)
         logger.info(
-            "collecting from cursors: activities>=%s, feedings>=%s, insight_days=%s",
+            "collecting from cursors: activities>=%s, insight_days=%s",
             activity_start,
-            feeding_since or "(full backfill)",
             insight_request,
         )
 
@@ -335,11 +343,17 @@ async def collect() -> dict:
 
             if hasattr(robot, "food_level"):  # Feeder-Robot
                 feeders += 1
+                feeder_id = str(robot.id)
+                feeding_since = db.latest_feeding_timestamp(feeder_id)
+                logger.info(
+                    "feeder %s: feedings>=%s", feeder_id, feeding_since or "(full backfill)"
+                )
                 try:
                     feeding_rows.extend(
-                        await _fetch_feedings(account, robot, feeding_since)
+                        {**row, "feeder_id": feeder_id}
+                        for row in await _fetch_feedings(account, robot, feeding_since)
                     )
-                    if db.record_food_level(robot.food_level):
+                    if db.record_food_level(feeder_id, robot.food_level):
                         food_level_changed = True
                 except Exception:  # noqa: BLE001
                     logger.exception("feeder collection failed for %s", robot.serial)
