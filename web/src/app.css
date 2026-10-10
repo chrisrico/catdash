@@ -375,7 +375,12 @@ tr.invalid td { color: var(--muted); }
 
 /* Feeding-schedule editor (modal). One block per meal: name/time/portions on the
    first row, the day toggles below. */
-.sched-edit { display: flex; flex-direction: column; gap: 12px; }
+/* The dialog caps at 80vh, so the meal list — not the whole body — takes the
+   overflow: Save/Cancel stay pinned and reachable however many meals there are. */
+.sched-edit { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.modal-panel .sched-edit { flex: 1 1 auto; }
+.sched-edit-list { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; }
 .sched-edit-meal { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--panel-2); }
 .sched-edit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .sched-edit-name { flex: 1 1 140px; min-width: 0; background: var(--panel); color: var(--text);
@@ -397,7 +402,8 @@ tr.invalid td { color: var(--muted); }
 .sched-edit-pause { margin-left: auto; }
 .sched-edit-add { align-self: flex-start; }
 .sched-edit-error { color: var(--bad); font-size: 0.82rem; }
-.sched-edit-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+.sched-edit-actions { display: flex; justify-content: flex-end; gap: 10px; flex: 0 0 auto;
+  padding-top: 12px; border-top: 1px solid var(--border); }
 
 /* Click-to-detail dialog (drilling into a chart's time bucket). Sits above the
    .has-tip tooltip (z-index 20) and the ECharts value box, whose DOM carries an

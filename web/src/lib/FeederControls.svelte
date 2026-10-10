@@ -209,34 +209,36 @@
 {#if editing}
   <Modal title="Edit feeding schedule" onClose={() => (editing = false)}>
     <div class="sched-edit">
-      {#each draft as d (d.key)}
-        <div class="sched-edit-meal">
-          <div class="sched-edit-row">
-            <input class="sched-edit-name" type="text" bind:value={d.name} placeholder="Meal name" maxlength="64" />
-            <input class="sched-edit-time" type="time" bind:value={d.time} />
-            <span class="sched-edit-portions">
-              <button type="button" aria-label="Fewer portions" disabled={d.portions <= 1}
-                onclick={() => (d.portions = Math.max(1, d.portions - 1))}>−</button>
-              <b>{d.portions}×</b>
-              <button type="button" aria-label="More portions" disabled={d.portions >= 16}
-                onclick={() => (d.portions = Math.min(16, d.portions + 1))}>+</button>
-              <span class="sched-edit-cups">≈ {draftCups(d.portions)}</span>
-            </span>
-            <button class="sched-edit-remove" title="Remove meal" aria-label="Remove meal"
-              onclick={() => removeMeal(d.key)}>✕</button>
+      <div class="sched-edit-list">
+        {#each draft as d (d.key)}
+          <div class="sched-edit-meal">
+            <div class="sched-edit-row">
+              <input class="sched-edit-name" type="text" bind:value={d.name} placeholder="Meal name" maxlength="64" />
+              <input class="sched-edit-time" type="time" bind:value={d.time} />
+              <span class="sched-edit-portions">
+                <button type="button" aria-label="Fewer portions" disabled={d.portions <= 1}
+                  onclick={() => (d.portions = Math.max(1, d.portions - 1))}>−</button>
+                <b>{d.portions}×</b>
+                <button type="button" aria-label="More portions" disabled={d.portions >= 16}
+                  onclick={() => (d.portions = Math.min(16, d.portions + 1))}>+</button>
+                <span class="sched-edit-cups">≈ {draftCups(d.portions)}</span>
+              </span>
+              <button class="sched-edit-remove" title="Remove meal" aria-label="Remove meal"
+                onclick={() => removeMeal(d.key)}>✕</button>
+            </div>
+            <div class="sched-edit-days">
+              {#each DAYS as day}
+                <button type="button" class="chip" class:active={d.days.includes(day)}
+                  onclick={() => toggleDay(d, day)}>{day}</button>
+              {/each}
+              <button type="button" class="chip sched-edit-pause" class:active={d.paused}
+                onclick={() => (d.paused = !d.paused)}>{d.paused ? "Paused" : "Pause"}</button>
+            </div>
           </div>
-          <div class="sched-edit-days">
-            {#each DAYS as day}
-              <button type="button" class="chip" class:active={d.days.includes(day)}
-                onclick={() => toggleDay(d, day)}>{day}</button>
-            {/each}
-            <button type="button" class="chip sched-edit-pause" class:active={d.paused}
-              onclick={() => (d.paused = !d.paused)}>{d.paused ? "Paused" : "Pause"}</button>
-          </div>
-        </div>
-      {/each}
+        {/each}
 
-      <button class="btn sm secondary sched-edit-add" onclick={addMeal}>+ Add meal</button>
+        <button class="btn sm secondary sched-edit-add" onclick={addMeal}>+ Add meal</button>
+      </div>
 
       {#if editError}<div class="sched-edit-error">{editError}</div>{/if}
 
