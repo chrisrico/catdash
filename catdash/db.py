@@ -9,8 +9,11 @@ Tables:
                        (from robot.get_activity_history) — cat detections,
                        clean cycles, litter dispensed, and raw weigh-ins.
   - daily_usage      : authoritative daily clean-cycle counts (from get_insight).
-  - feedings         : Feeder-Robot meal/snack events (timestamp, cups, name).
-  - food_level       : Feeder-Robot hopper level snapshots over time.
+  - feeders          : Feeder-Robot units, each optionally assigned to the pet
+                       that eats from it (pet_id NULL = shared by every cat).
+  - feedings         : Feeder-Robot meal/snack events (timestamp, cups, name),
+                       tagged with the feeder that dispensed them.
+  - food_level       : Feeder-Robot hopper level snapshots over time, per feeder.
   - wait_time        : Litter-Robot clean-cycle wait-time (delay) over time —
                        known history seeded at init (see _wait_time_history) plus
                        live snapshots on change (record_wait_time), so each
@@ -37,6 +40,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -81,22 +85,34 @@ CREATE TABLE IF NOT EXISTS daily_usage (
     updated_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS feeders (
+    id          TEXT PRIMARY KEY,        -- Whisker feeder unit id
+    name        TEXT,
+    serial      TEXT,
+    pet_id      TEXT,                    -- the cat it feeds; NULL = shared
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS feedings (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    feeder_id   TEXT,                    -- NULL only for unclaimed legacy rows
     timestamp   TEXT NOT NULL,           -- ISO-8601 UTC of the feeding
     type        TEXT NOT NULL,           -- 'meal' | 'snack'
     amount_cups REAL,
     name        TEXT,                    -- e.g. "Breakfast", "snack"
     inserted_at TEXT NOT NULL,
-    UNIQUE (timestamp, type)
+    UNIQUE (feeder_id, timestamp, type)
 );
 CREATE INDEX IF NOT EXISTS idx_feedings_ts ON feedings(timestamp);
 
 CREATE TABLE IF NOT EXISTS food_level (
-    timestamp   TEXT PRIMARY KEY,        -- collection time of the reading
+    feeder_id   TEXT,                    -- NULL only for unclaimed legacy rows
+    timestamp   TEXT NOT NULL,           -- collection time of the reading
     level       INTEGER,                 -- 0-100 percent (hopper fullness)
-    inserted_at TEXT NOT NULL
+    inserted_at TEXT NOT NULL,
+    UNIQUE (feeder_id, timestamp)
 );
+CREATE INDEX IF NOT EXISTS idx_food_level_ts ON food_level(timestamp);
 
 CREATE TABLE IF NOT EXISTS wait_time (
     timestamp   TEXT PRIMARY KEY,        -- collection time of the reading
@@ -207,6 +223,7 @@ def init_db() -> None:
     _check_writable(path)
     try:
         with connect() as conn:
+            _migrate_feeder_tables(conn)
             conn.executescript(SCHEMA)
             _add_missing_columns(conn)
             _seed_wait_time_history(conn)
@@ -218,10 +235,62 @@ def init_db() -> None:
         raise
 
 
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate_feeder_tables(conn: sqlite3.Connection) -> None:
+    """Rebuild pre-multi-feeder `feedings` / `food_level` tables with a
+    feeder_id column. A plain ADD COLUMN isn't enough: the old uniqueness keys
+    (timestamp, type) and (timestamp) would make two feeders on the same meal
+    schedule collide, and SQLite can't alter a constraint in place. Each rebuild
+    is one transaction, so a crash can't strand history in a *_old table. Existing
+    rows keep feeder_id NULL until claimed (see upsert_feedings).
+    No-op on a fresh DB (tables absent) or an already-migrated one."""
+    if "timestamp" in _columns(conn, "feedings") and "feeder_id" not in _columns(conn, "feedings"):
+        conn.executescript(
+            """
+            BEGIN;
+            ALTER TABLE feedings RENAME TO feedings_old;
+            CREATE TABLE feedings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                feeder_id   TEXT,
+                timestamp   TEXT NOT NULL,
+                type        TEXT NOT NULL,
+                amount_cups REAL,
+                name        TEXT,
+                inserted_at TEXT NOT NULL,
+                UNIQUE (feeder_id, timestamp, type)
+            );
+            INSERT INTO feedings (id, timestamp, type, amount_cups, name, inserted_at)
+                SELECT id, timestamp, type, amount_cups, name, inserted_at FROM feedings_old;
+            DROP TABLE feedings_old;
+            COMMIT;
+            """
+        )
+    if "timestamp" in _columns(conn, "food_level") and "feeder_id" not in _columns(conn, "food_level"):
+        conn.executescript(
+            """
+            BEGIN;
+            ALTER TABLE food_level RENAME TO food_level_old;
+            CREATE TABLE food_level (
+                feeder_id   TEXT,
+                timestamp   TEXT NOT NULL,
+                level       INTEGER,
+                inserted_at TEXT NOT NULL,
+                UNIQUE (feeder_id, timestamp)
+            );
+            INSERT INTO food_level (timestamp, level, inserted_at)
+                SELECT timestamp, level, inserted_at FROM food_level_old;
+            DROP TABLE food_level_old;
+            COMMIT;
+            """
+        )
+
+
 def _add_missing_columns(conn: sqlite3.Connection) -> None:
     for table, column, col_type in _ADDED_COLUMNS:
-        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
-        if column not in have:
+        if column not in _columns(conn, table):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
 
@@ -324,21 +393,82 @@ def upsert_daily_usage(days: Iterable[dict[str, Any]]) -> int:
         )
 
 
-def upsert_feedings(feedings: Iterable[dict[str, Any]]) -> int:
-    now = _now()
-    rows = [
-        (f["timestamp"], f["type"], f.get("amount_cups"), f.get("name"), now)
-        for f in feedings
-    ]
+def upsert_feeders(feeders: Iterable[dict[str, Any]]) -> int:
+    """Upsert feeder units' name/serial. Never touches pet_id — that's the
+    user's assignment (set_feeder_pet), which must survive every collection."""
+    rows = [(str(f["id"]), f.get("name"), f.get("serial"), _now()) for f in feeders]
     if not rows:
         return 0
     with connect() as conn:
         return _count_new(
             conn,
             lambda: conn.executemany(
+                """INSERT INTO feeders (id, name, serial, updated_at) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+                                                 serial=excluded.serial,
+                                                 updated_at=excluded.updated_at""",
+                rows,
+            ),
+        )
+
+
+def claim_legacy_food_levels(feeder_id: str) -> int:
+    """Attribute hopper snapshots stored before feeders were tracked (feeder_id
+    NULL) to `feeder_id`. The collector calls this only while the account has
+    exactly one feeder. Unlike feedings, snapshots can't be re-fetched and matched
+    (see upsert_feedings), so this is the only way they get an owner."""
+    with connect() as conn:
+        return _count_new(
+            conn,
+            lambda: conn.execute(
+                "UPDATE food_level SET feeder_id = ? WHERE feeder_id IS NULL",
+                [feeder_id],
+            ),
+        )
+
+
+def set_feeder_pet(feeder_id: str, pet_id: str | None) -> bool:
+    """Assign a feeder to a pet (None = shared). False if the feeder is unknown."""
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE feeders SET pet_id = ? WHERE id = ?", [pet_id, feeder_id]
+        )
+    return cur.rowcount > 0
+
+
+def upsert_feedings(feedings: Iterable[dict[str, Any]]) -> int:
+    """Insert feedings, deduped per feeder. A feeding stored before feeders were
+    tracked (feeder_id NULL) is claimed by the feeder that re-fetches it rather
+    than duplicated — NULL never collides in the UNIQUE key, and each feeder's
+    first run re-fetches its whole history (its cursor starts empty). Rows no
+    feeder re-fetches (e.g. a retired unit's) stay NULL and count as shared."""
+    now = _now()
+    rows = [
+        (
+            f.get("feeder_id"),
+            f["timestamp"],
+            f["type"],
+            f.get("amount_cups"),
+            f.get("name"),
+            now,
+        )
+        for f in feedings
+    ]
+    if not rows:
+        return 0
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM feedings WHERE feeder_id IS NULL LIMIT 1").fetchone():
+            conn.executemany(
+                """UPDATE feedings SET feeder_id = ?
+                   WHERE feeder_id IS NULL AND timestamp = ? AND type = ?""",
+                [(r[0], r[1], r[2]) for r in rows if r[0] is not None],
+            )
+        return _count_new(
+            conn,
+            lambda: conn.executemany(
                 """INSERT OR IGNORE INTO feedings
-                   (timestamp, type, amount_cups, name, inserted_at)
-                   VALUES (?, ?, ?, ?, ?)""",
+                   (feeder_id, timestamp, type, amount_cups, name, inserted_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
                 rows,
             ),
         )
@@ -352,10 +482,13 @@ def latest_activity_timestamp() -> str | None:
     return row["ts"] if row and row["ts"] else None
 
 
-def latest_feeding_timestamp() -> str | None:
-    """Newest stored feeding timestamp (ISO-8601 UTC), or None if empty."""
+def latest_feeding_timestamp(feeder_id: str) -> str | None:
+    """Newest stored feeding timestamp (ISO-8601 UTC) for one feeder, or None if
+    it has none yet — so a newly added feeder gets its own full backfill."""
     with connect() as conn:
-        row = conn.execute("SELECT MAX(timestamp) AS ts FROM feedings").fetchone()
+        row = conn.execute(
+            "SELECT MAX(timestamp) AS ts FROM feedings WHERE feeder_id = ?", [feeder_id]
+        ).fetchone()
     return row["ts"] if row and row["ts"] else None
 
 
@@ -366,20 +499,23 @@ def latest_usage_date() -> str | None:
     return row["d"] if row and row["d"] else None
 
 
-def record_food_level(level: int | None) -> bool:
-    """Snapshot the hopper level, but only when it changed (clean step series)."""
+def record_food_level(feeder_id: str, level: int | None) -> bool:
+    """Snapshot a feeder's hopper level, but only when it changed (clean step
+    series per feeder)."""
     if level is None:
         return False
     now = _now()
     with connect() as conn:
         last = conn.execute(
-            "SELECT level FROM food_level ORDER BY timestamp DESC LIMIT 1"
+            "SELECT level FROM food_level WHERE feeder_id = ? ORDER BY timestamp DESC LIMIT 1",
+            [feeder_id],
         ).fetchone()
         if last is not None and last["level"] == level:
             return False
         conn.execute(
-            "INSERT OR IGNORE INTO food_level (timestamp, level, inserted_at) VALUES (?, ?, ?)",
-            (now, level, now),
+            """INSERT OR IGNORE INTO food_level (feeder_id, timestamp, level, inserted_at)
+               VALUES (?, ?, ?, ?)""",
+            (feeder_id, now, level, now),
         )
     return True
 
@@ -421,9 +557,44 @@ def _range(column: str, start: str | None, end: str | None) -> tuple[str, list[A
     return where, params
 
 
+def _and(where: str, clause: str) -> str:
+    """Append `clause` to a WHERE string from _range() (which may be empty)."""
+    return f"{where} AND {clause}" if where else f" WHERE {clause}"
+
+
+# A pet's food = feedings from its own feeders plus shared ones (unassigned, or
+# legacy rows never tied to a feeder). Phrased as "not another cat's feeder" so a
+# feeder the collector hasn't recorded yet also counts as shared.
+_PET_FEEDER_CLAUSE = (
+    "(feeder_id IS NULL OR feeder_id NOT IN "
+    "(SELECT id FROM feeders WHERE pet_id IS NOT NULL AND pet_id != ?))"
+)
+
+
+def _feeder_filter(
+    where: str, params: list[Any], pet_id: str | None
+) -> tuple[str, list[Any]]:
+    if not pet_id:
+        return where, params
+    return _and(where, _PET_FEEDER_CLAUSE), [*params, pet_id]
+
+
 def get_pets() -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute("SELECT id, name FROM pets ORDER BY name").fetchall()
+    return [dict(r) for r in rows]
+
+
+def pet_exists(pet_id: str) -> bool:
+    with connect() as conn:
+        return conn.execute("SELECT 1 FROM pets WHERE id = ?", [pet_id]).fetchone() is not None
+
+
+def get_feeders() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, name, serial, pet_id FROM feeders ORDER BY name, id"
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -450,19 +621,114 @@ def get_weights(
     return [_with_invalid(r) for r in rows]
 
 
+# Weigh-in attribution. The litter box is shared and its activity stream says
+# only "Pet Weight Recorded: N lbs" — no pet. Whisker's curated per-pet history
+# (weight_readings) is the same weigh-in, stamped a few seconds later with the
+# same weight, so an exact match names the cat. Weigh-ins with no curated twin
+# (from before we stored curated history, which Whisker only keeps for days) fall
+# back to the pet whose weight around that time is closest, if it's close enough
+# — among pets already tracked by then (a cat added later can't have made an
+# older weigh-in; before any pet was tracked, only the earliest-tracked one).
+_MATCH_SECONDS = 120
+_MATCH_LBS = 0.1
+_FALLBACK_LBS = 1.5
+_FALLBACK_MARGIN_LBS = 0.5  # runner-up must be this much further off, or no call
+
+
+def _attribute_weighins(
+    raw: list[dict[str, Any]], curated: list[dict[str, Any]], pet_ids: list[str]
+) -> list[str | None]:
+    """The pet_id (or None if unattributable) for each raw weigh-in, in order."""
+    if len(pet_ids) == 1:
+        return [pet_ids[0]] * len(raw)  # one cat: every visit is theirs
+    cur = sorted(
+        (_parse_ts(c["timestamp"]).timestamp(), c["pet_id"], c["weight_lbs"])
+        for c in curated
+    )
+    cur_times = [t for t, _, _ in cur]
+    per_pet: dict[str, tuple[list[float], list[float]]] = {}
+    for t, pid, w in cur:
+        times, weights = per_pet.setdefault(pid, ([], []))
+        times.append(t)
+        weights.append(w)
+
+    first_seen = cur[0][0] if cur else None
+
+    def nearest(times: list[float], t: float) -> int:
+        i = bisect_left(times, t)
+        if i == len(times) or (i > 0 and t - times[i - 1] <= times[i] - t):
+            return i - 1
+        return i
+
+    out: list[str | None] = []
+    for r in raw:
+        t, w = _parse_ts(r["timestamp"]).timestamp(), r["weight_lbs"]
+        # 1) Exact twin in the curated history.
+        lo = bisect_left(cur_times, t - _MATCH_SECONDS)
+        twins = [
+            (abs(ct - t), pid)
+            for ct, pid, cw in cur[lo:]
+            if ct <= t + _MATCH_SECONDS and abs(cw - w) <= _MATCH_LBS
+        ] if cur else []
+        if twins:
+            out.append(min(twins)[1])
+            continue
+        # 2) Closest weight among each candidate pet's reading nearest in time;
+        #    ambiguous (cats too alike) or too far from every pet stays unattributed.
+        candidates = [pid for pid in per_pet if per_pet[pid][0][0] <= t] or [
+            pid for pid in per_pet if per_pet[pid][0][0] == first_seen
+        ]
+        diffs = sorted(
+            (abs(per_pet[pid][1][nearest(per_pet[pid][0], t)] - w), pid)
+            for pid in candidates
+        )
+        if diffs and diffs[0][0] <= _FALLBACK_LBS and (
+            len(diffs) == 1 or diffs[1][0] - diffs[0][0] >= _FALLBACK_MARGIN_LBS
+        ):
+            out.append(diffs[0][1])
+        else:
+            out.append(None)
+    return out
+
+
+def _attributed_weighins(
+    where: str = "", params: list[Any] | None = None
+) -> list[tuple[dict[str, Any], str | None]]:
+    """Raw weigh-ins (optionally range-filtered), oldest first, each paired with
+    the pet it's attributed to (or None)."""
+    with connect() as conn:
+        raw = conn.execute(
+            f"""SELECT id, timestamp, weight_lbs, invalid_at FROM activities
+                {_and(where, "weight_lbs IS NOT NULL")} ORDER BY timestamp""",
+            params or [],
+        ).fetchall()
+        # Readings flagged invalid are bad measurements: they'd drag the
+        # closest-weight fallback toward the wrong cat, so they don't serve as
+        # a reference (their raw twins still get attributed, and still listed).
+        curated = conn.execute(
+            "SELECT pet_id, timestamp, weight_lbs FROM weight_readings "
+            "WHERE invalid_at IS NULL"
+        ).fetchall()
+        pet_ids = [r["id"] for r in conn.execute("SELECT id FROM pets")]
+    attributed = _attribute_weighins(raw, curated, pet_ids)
+    return list(zip((_with_invalid(r) for r in raw), attributed))
+
+
 def get_raw_weights(
-    start: str | None = None, end: str | None = None
+    start: str | None = None, end: str | None = None, pet_id: str | None = None
 ) -> list[dict[str, Any]]:
-    """Raw weigh-ins parsed from the activity stream (not pet-attributed).
+    """Raw weigh-ins parsed from the activity stream — every one, or only those
+    attributed to `pet_id` (see _attribute_weighins).
 
     Includes weigh-ins marked invalid (flagged `invalid: true`) so the dashboard
     can still list and restore them; callers charting weight must skip those."""
     where, params = _range("timestamp", start, end)
-    clause = " AND weight_lbs IS NOT NULL" if where else " WHERE weight_lbs IS NOT NULL"
+    if pet_id:
+        return [r for r, owner in _attributed_weighins(where, params) if owner == pet_id]
     with connect() as conn:
         rows = conn.execute(
             f"""SELECT id, timestamp, weight_lbs, invalid_at FROM activities
-                {where}{clause} ORDER BY timestamp""",
+                {_and(where, "weight_lbs IS NOT NULL")} ORDER BY timestamp""",
             params,
         ).fetchall()
     return [_with_invalid(r) for r in rows]
@@ -604,9 +870,12 @@ def get_faults(
 
 
 def get_feedings(
-    start: str | None = None, end: str | None = None, limit: int = 500
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 500,
+    pet_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    where, params = _range("timestamp", start, end)
+    where, params = _feeder_filter(*_range("timestamp", start, end), pet_id)
     with connect() as conn:
         rows = conn.execute(
             f"""SELECT timestamp, type, amount_cups, name FROM feedings
@@ -617,10 +886,10 @@ def get_feedings(
 
 
 def get_daily_food(
-    start: str | None = None, end: str | None = None
+    start: str | None = None, end: str | None = None, pet_id: str | None = None
 ) -> list[dict[str, Any]]:
-    """Total cups dispensed per day."""
-    where, params = _range("timestamp", start, end)
+    """Total cups dispensed per day (from `pet_id`'s and shared feeders, if given)."""
+    where, params = _feeder_filter(*_range("timestamp", start, end), pet_id)
     with connect() as conn:
         rows = conn.execute(
             f"""SELECT substr(timestamp, 1, 10) AS date,
@@ -633,9 +902,9 @@ def get_daily_food(
 
 
 def get_food_levels(
-    start: str | None = None, end: str | None = None
+    start: str | None = None, end: str | None = None, pet_id: str | None = None
 ) -> list[dict[str, Any]]:
-    where, params = _range("timestamp", start, end)
+    where, params = _feeder_filter(*_range("timestamp", start, end), pet_id)
     with connect() as conn:
         rows = conn.execute(
             f"SELECT timestamp, level FROM food_level{where} ORDER BY timestamp",
@@ -651,8 +920,30 @@ def _parse_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _pairs_for_pet(
+    pairs: list[tuple[datetime, float]], pet_id: str
+) -> list[tuple[datetime, float]]:
+    """Keep the (cycle, gap) visits whose weigh-in belongs to `pet_id`: the
+    latest weigh-in within the visit itself (Cat Detected -> clean cycle, with a
+    minute of slack before detection). Visits with no weigh-in (cat never settled
+    on the scale) can't be attributed and drop out — they must not inherit an
+    earlier visit's cat."""
+    weighins = _attributed_weighins()
+    times = [_parse_ts(r["timestamp"]) for r, _ in weighins]
+    kept = []
+    for when, gap in pairs:
+        i = bisect_right(times, when)  # weighins[i - 1] is the latest at/before `when`
+        if (
+            i > 0
+            and (when - times[i - 1]).total_seconds() <= gap + 60
+            and weighins[i - 1][1] == pet_id
+        ):
+            kept.append((when, gap))
+    return kept
+
+
 def get_visit_durations(
-    start: str | None = None, end: str | None = None
+    start: str | None = None, end: str | None = None, pet_id: str | None = None
 ) -> dict[str, Any]:
     """Approximate time-in-box per bathroom visit.
 
@@ -662,6 +953,8 @@ def get_visit_durations(
     visits predating any snapshot it's inferred as the largest valid setting that
     fits under the shortest observed gap (a gap can't be shorter than the wait).
     Returns count + median/mean seconds (median is robust to odd long pairings).
+    With `pet_id`, only visits whose weigh-in (the latest one in the 30 min
+    before the cycle) is attributed to that pet count.
     """
     where, params = _range("timestamp", start, end)
     cond = "(action = 'Cat Detected' OR action = 'Clean Cycle In Progress')"
@@ -691,6 +984,9 @@ def get_visit_durations(
                 if 0 < gap <= 1800:
                     pairs.append((when, gap))
             last_detect = None
+
+    if pet_id and pairs:
+        pairs = _pairs_for_pet(pairs, pet_id)
 
     if not pairs:
         return {"count": 0, "median_sec": None, "mean_sec": None}
@@ -771,21 +1067,28 @@ def get_stats(pet_id: str | None = None) -> dict[str, Any]:
             "SELECT date, cycles FROM daily_usage ORDER BY cycles DESC, date DESC LIMIT 1"
         ).fetchone()
 
+        # Feeder stats cover only the pet's own + shared feeders (all, with no pet).
+        fwhere, fparams = _feeder_filter("", [], pet_id)
         since_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         feed = conn.execute(
-            "SELECT COUNT(*) AS count, COALESCE(SUM(amount_cups), 0) AS total_cups FROM feedings"
+            "SELECT COUNT(*) AS count, COALESCE(SUM(amount_cups), 0) AS total_cups "
+            f"FROM feedings{fwhere}",
+            fparams,
         ).fetchone()
+        rwhere, rparams = _feeder_filter(" WHERE timestamp >= ?", [since_24h], pet_id)
         recent = conn.execute(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(amount_cups), 0) AS cups FROM feedings "
-            "WHERE timestamp >= ?",
-            [since_24h],
+            "SELECT COUNT(*) AS n, COALESCE(SUM(amount_cups), 0) AS cups "
+            f"FROM feedings{rwhere}",
+            rparams,
         ).fetchone()
         last_feeding = conn.execute(
-            "SELECT timestamp, type, amount_cups, name FROM feedings "
-            "ORDER BY timestamp DESC LIMIT 1"
+            f"SELECT timestamp, type, amount_cups, name FROM feedings{fwhere} "
+            "ORDER BY timestamp DESC LIMIT 1",
+            fparams,
         ).fetchone()
         food = conn.execute(
-            "SELECT level, timestamp FROM food_level ORDER BY timestamp DESC LIMIT 1"
+            f"SELECT level, timestamp FROM food_level{fwhere} ORDER BY timestamp DESC LIMIT 1",
+            fparams,
         ).fetchone()
         faults = conn.execute(
             f"SELECT COUNT(*) AS count FROM activities WHERE {_FAULT_WHERE}"

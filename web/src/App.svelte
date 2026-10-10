@@ -12,6 +12,8 @@
   import ActivityTable from "./lib/ActivityTable.svelte";
 
   let pets = $state([]);
+  // Feeder units and the cat each is assigned to (pet_id null = shared).
+  let feeders = $state([]);
   // UI selections persist to localStorage (see the $effect below). Add a new
   // option here with loadPersisted(...) and a savePersisted line to persist it.
   let petId = $state(loadPersisted("petId", ""));
@@ -85,6 +87,16 @@
       : "Weight, litter-box & feeder history"
   );
 
+  const selectedPet = $derived(pets.find((p) => p.id === petId));
+
+  // Does the selected cat eat from any feeder (its own or a shared one)? A cat
+  // fed manually has none, so its chart shows weight only. "All cats" counts
+  // every feeder. No feeder rows yet (first collection still running, or the
+  // fetch failed) means unknown, not "none": keep showing whatever food exists.
+  const hasFeeder = $derived(
+    feeders.length === 0 || feeders.some((f) => !petId || !f.pet_id || f.pet_id === petId)
+  );
+
   const footnote = $derived.by(() => {
     const s = sections.stats.data;
     if (!s) return "";
@@ -105,12 +117,13 @@
     const qs = new URLSearchParams();
     const start = rangeToStart(range);
     if (start) qs.set("start", start);
-    const petQs = petId ? `&pet_id=${encodeURIComponent(petId)}` : "";
+    if (petId) qs.set("pet_id", petId);
 
     status = "Loading…";
     statusError = false;
     await Promise.all([
-      loadSection("weights", `/api/weights?${qs}${petQs}`),
+      loadFeeders(),
+      loadSection("weights", `/api/weights?${qs}`),
       loadSection("food", `/api/food?${qs}`),
       loadSection("stats", `/api/stats?${petId ? `pet_id=${encodeURIComponent(petId)}` : ""}`),
       loadSection("habits", `/api/habits?${qs}`),
@@ -146,6 +159,34 @@
     } finally {
       ready = true;
     }
+  }
+
+  async function loadFeeders() {
+    try {
+      feeders = await fetchJSON("/api/feeders");
+    } catch (err) {
+      console.error("[catdash] failed to load feeders:", err);
+    }
+  }
+
+  // Returns whether the assignment saved, so the picker can revert if not.
+  async function assignFeeder(feederId, assignedPetId) {
+    let ok = true;
+    try {
+      const res = await fetch(`/api/feeders/${encodeURIComponent(feederId)}/pet`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pet_id: assignedPetId || null }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error("[catdash] feeder assignment failed:", err);
+      status = `Couldn't assign feeder: ${err.message}`;
+      statusError = true;
+      ok = false;
+    }
+    if (ok) await refresh(); // also reloads feeders
+    return ok;
   }
 
   // Ask the server whether remote control is enabled, so we know whether to show
@@ -305,7 +346,7 @@
   {#if activeTab === "live"}
     <Robots bind:live={streamLive} />
   {:else if activeTab === "trends"}
-    <Controls {pets} bind:petId bind:range />
+    <Controls {pets} bind:petId bind:range {feeders} onAssignFeeder={assignFeeder} />
 
     {#if sections.stats.data}
       <Cards
@@ -320,12 +361,16 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Weight &amp; food</h2>
-        <span class="hint">Weight trend (median + 7-day avg) · food dispensed per bucket</span>
+        <span class="hint">
+          Weight trend (median + 7-day avg) ·
+          {hasFeeder ? "food dispensed per bucket" : `no feeder — ${selectedPet?.name ?? "this cat"} is fed manually`}
+        </span>
       </div>
       {#if sections.weights.data && sections.food.data}
         <WeightFoodChart
           weights={sections.weights.data}
           food={sections.food.data}
+          showFood={hasFeeder}
           onToggleInvalid={setWeighInInvalid}
         />
       {:else if sections.weights.error || sections.food.error}
@@ -338,7 +383,7 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Bathroom habits</h2>
-        <span class="hint">How often &amp; what time of day {pets.length === 1 ? pets[0].name : "your cats"} use the box</span>
+        <span class="hint">How often &amp; what time of day {selectedPet?.name ?? "your cats"} use{selectedPet ? "s" : ""} the box</span>
       </div>
       {#if sections.weights.data}
         <HabitsChart weights={sections.weights.data} duration={sections.habits.data?.duration} />

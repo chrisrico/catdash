@@ -26,7 +26,9 @@
   import { palette, baseOption, timeAxis, valueAxis } from "./echarts.js";
   import { themeState } from "./theme.svelte.js";
 
-  let { weights, food, onToggleInvalid = null } = $props();
+  // showFood=false: the selected cat has no feeder (fed manually), so drop the
+  // food bars and their axis rather than plotting an empty series.
+  let { weights, food, showFood = true, onToggleInvalid = null } = $props();
 
   const RAW_NAME = "Raw weigh-ins";
   const DAY = 86400000;
@@ -122,16 +124,18 @@
         lineStyle: { color: c.accent2, width: 2, type: [6, 4] },
       });
     }
-    series.push({
-      name: `Food (cups/${unit})`,
-      type: "bar",
-      yAxisIndex: 1,
-      data: foodBars,
-      z: 1,
-      barMaxWidth: 26,
-      barMinHeight: 1,
-      itemStyle: { color: c.barFood, borderColor: c.good },
-    });
+    if (showFood) {
+      series.push({
+        name: `Food (cups/${unit})`,
+        type: "bar",
+        yAxisIndex: 1,
+        data: foodBars,
+        z: 1,
+        barMaxWidth: 26,
+        barMinHeight: 1,
+        itemStyle: { color: c.barFood, borderColor: c.good },
+      });
+    }
     if (raw.length) {
       series.push({
         name: RAW_NAME,
@@ -170,12 +174,16 @@
           nameTextStyle: { color: c.accent },
           axisLabel: { ...valueAxis(c).axisLabel, formatter: "{value} lb" },
         },
-        {
-          ...valueAxis(c),
-          name: "cups",
-          nameTextStyle: { color: c.good },
-          splitLine: { show: false },
-        },
+        ...(showFood
+          ? [
+              {
+                ...valueAxis(c),
+                name: "cups",
+                nameTextStyle: { color: c.good },
+                splitLine: { show: false },
+              },
+            ]
+          : []),
       ],
       series,
     };

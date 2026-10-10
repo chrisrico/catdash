@@ -162,17 +162,25 @@ All via environment variables (see [`.env.example`](.env.example)):
 The dashboard is built on a small JSON API you can also use directly:
 
 - `GET /api/pets` — pets/cats on the account
-- `GET /api/weights?pet_id=&start=&end=` — `{curated, raw}` weight series (a
-  point marked invalid carries `invalid: true`; charts and stats skip those)
+- `GET /api/weights?pet_id=&start=&end=` — `{curated, raw}` weight series. With
+  `pet_id`, `raw` holds only the litter-box weigh-ins attributed to that cat. A
+  point marked invalid carries `invalid: true`; charts and stats skip those
 - `POST /api/weigh-ins/{id}/invalid` — body `{"invalid": true|false}`: flag a raw
   weigh-in (`id` from `/api/weights` `raw` or `/api/activities`) as invalid, or
   restore it. Its curated twin (same weight, seconds later) is flagged with it.
 - `GET /api/usage?start=&end=` — daily cycles + weigh-ins
 - `GET /api/activities?start=&end=&limit=` — litter-box activity feed
-- `GET /api/feedings?start=&end=&limit=` — feeder meal/snack events
-- `GET /api/food?start=&end=` — `{daily, levels}` cups dispensed + hopper level
+- `GET /api/feeders` — feeder units and the cat each is assigned to (`pet_id` null = shared)
+- `PUT /api/feeders/{id}/pet` — assign a feeder to a cat (`{"pet_id": "..."}`), or
+  `{"pet_id": null}` to share it among all cats
+- `GET /api/feedings?pet_id=&start=&end=&limit=` — feeder meal/snack events
+- `GET /api/food?pet_id=&start=&end=` — `{daily, feedings, levels}` cups dispensed + hopper level
 - `GET /api/stats?pet_id=` — summary stats (weight + usage + feeder)
-- `GET /api/habits?start=&end=` — bathroom-habit aggregates (approx time-in-box per visit)
+- `GET /api/habits?pet_id=&start=&end=` — bathroom-habit aggregates (approx time-in-box per visit)
+
+With `pet_id`, feeder data covers that cat's own feeders plus shared (unassigned)
+ones. A cat with no feeder (fed by hand) gets no feeder data. Assign feeders from
+the **Trends** tab (a "*Feeder name* feeds" picker, shown when the account has more than one cat).
 - `POST /api/refresh` — start a collection now (returns `202` immediately; runs in
   the background — poll `GET /api/refresh/status` for progress/result). Returns
   `429` with `retry_after_seconds` within `REFRESH_COOLDOWN_MINUTES` of the last

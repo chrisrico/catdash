@@ -177,8 +177,27 @@ def api_weights(
 ) -> dict:
     return {
         "curated": db.get_weights(pet_id=pet_id, start=start, end=end),
-        "raw": db.get_raw_weights(start=start, end=end),
+        "raw": db.get_raw_weights(start=start, end=end, pet_id=pet_id),
     }
+
+
+@app.get("/api/feeders")
+def api_feeders() -> list[dict]:
+    """Feeder units and the cat each is assigned to (pet_id null = shared)."""
+    return db.get_feeders()
+
+
+# Not behind CONTROLS_ENABLED: this labels catdash's own data (whose food is
+# whose) and never touches the robot.
+@app.put("/api/feeders/{feeder_id}/pet")
+def api_feeder_pet(feeder_id: str, payload: dict = Body(default={})) -> dict:
+    """Assign a feeder to a cat ({"pet_id": "..."}) or make it shared (null)."""
+    pet_id = payload.get("pet_id") or None
+    if pet_id is not None and (not isinstance(pet_id, str) or not db.pet_exists(pet_id)):
+        raise HTTPException(status_code=400, detail="Unknown pet")
+    if not db.set_feeder_pet(feeder_id, pet_id):
+        raise HTTPException(status_code=404, detail="Feeder not found")
+    return {"ok": True, "id": feeder_id, "pet_id": pet_id}
 
 
 @app.get("/api/usage")
@@ -205,22 +224,25 @@ def api_feedings(
     start: str | None = Query(None),
     end: str | None = Query(None),
     limit: int = Query(500, ge=1, le=5000),
+    pet_id: str | None = Query(None),
 ) -> list[dict]:
-    return db.get_feedings(start=start, end=end, limit=limit)
+    return db.get_feedings(start=start, end=end, limit=limit, pet_id=pet_id)
 
 
 @app.get("/api/food")
 def api_food(
     start: str | None = Query(None),
     end: str | None = Query(None),
+    pet_id: str | None = Query(None),
 ) -> dict:
     """Feeder data: daily cups dispensed, individual meals/snacks, and hopper
     food-level snapshots. `feedings` powers the per-meal breakdown when drilling
-    into a chart bucket (limit high enough to cover any in-range bucket)."""
+    into a chart bucket (limit high enough to cover any in-range bucket). With
+    pet_id, only that cat's feeders plus shared (unassigned) ones."""
     return {
-        "daily": db.get_daily_food(start=start, end=end),
-        "feedings": db.get_feedings(start=start, end=end, limit=10000),
-        "levels": db.get_food_levels(start=start, end=end),
+        "daily": db.get_daily_food(start=start, end=end, pet_id=pet_id),
+        "feedings": db.get_feedings(start=start, end=end, limit=10000, pet_id=pet_id),
+        "levels": db.get_food_levels(start=start, end=end, pet_id=pet_id),
     }
 
 
@@ -258,10 +280,11 @@ def api_weigh_in_invalid(activity_id: int, payload: dict = Body(default={})) -> 
 def api_habits(
     start: str | None = Query(None),
     end: str | None = Query(None),
+    pet_id: str | None = Query(None),
 ) -> dict:
     """Bathroom-habit aggregates that aren't trivially derived client-side —
-    currently the approximate time-in-box per visit."""
-    return {"duration": db.get_visit_durations(start=start, end=end)}
+    currently the approximate time-in-box per visit (per cat, with pet_id)."""
+    return {"duration": db.get_visit_durations(start=start, end=end, pet_id=pet_id)}
 
 
 # Named /api/refresh, NOT /api/collect: ad blockers (uBlock/EasyPrivacy, Firefox
